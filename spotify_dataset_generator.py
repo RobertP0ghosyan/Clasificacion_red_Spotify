@@ -200,11 +200,11 @@ if __name__ == "__main__":
     print("=" * 50)
     print("\nIMPORTANT NOTES:")
     print("1. Run this script with sudo/administrator privileges")
-    print("2. Update SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET")
+    print("2. Update SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in the env file")
     print("3. Update SONG_URIS with your test songs")
     print("4. Make sure Chrome is installed")
     print("5. Install required packages:")
-    print("   pip install selenium spotipy scapy")
+    print("   pip install -r requirements.txt")
     print("=" * 50 + "\n")
     
     input("Press Enter to start data collection...")

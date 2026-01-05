@@ -9,19 +9,23 @@ from selenium.webdriver.chrome.options import Options
 from scapy.all import sniff
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from dotenv import load_dotenv
+
+# Load .env file from current directory
+load_dotenv()
 
 # Configuration
-SPOTIFY_CLIENT_ID = "YOUR_CLIENT_ID"
-SPOTIFY_CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-SPOTIFY_REDIRECT_URI = "http://localhost:8888/callback"
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 DATASET_FILE = "spotify_traffic_dataset.pkl"
 CAPTURE_DURATION = 60  # seconds
 
 # List of song URIs to capture (replace with your test songs)
 SONG_URIS = [
-    "spotify:track:SONG_ID_1",
-    "spotify:track:SONG_ID_2",
-    "spotify:track:SONG_ID_3"
+    "spotify:track:5SudOD9R1Of6CsJVWZy6CQ",
+    "spotify:track:4oVO4fGNRRvEn0CRuFO4qv",
+    "spotify:track:6hpuesKPNa3WhV48O7Fa47"
 ]
 
 # Known Spotify IP ranges (you may need to update these)

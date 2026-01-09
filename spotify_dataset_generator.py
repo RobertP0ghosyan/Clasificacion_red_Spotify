@@ -43,7 +43,7 @@ class SpotifyDatasetGenerator:
         os.makedirs(self.dataset_dir, exist_ok=True)
         os.makedirs(self.pcap_captures_dir, exist_ok=True)
 
-        self.dataset_file=f"{self.dataset_dir}/spotify_traffic_dataset_{audio_quality}.cvs"
+        self.dataset_file=f"{self.dataset_dir}/spotify_traffic_dataset_{audio_quality}.csv"
                 
     def setup_spotify_client(self):
         """Initialize Spotipy client"""

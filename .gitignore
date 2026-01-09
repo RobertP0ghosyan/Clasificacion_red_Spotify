@@ -2,5 +2,7 @@ venv/
 .venv/
 .env
 dataset/
+pcap/
 *.cvs
 *.pcap
+.cache

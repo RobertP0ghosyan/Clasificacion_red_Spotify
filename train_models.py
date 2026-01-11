@@ -453,9 +453,6 @@ def main():
     print("\n🎯 Purpose:")
     print("  • Content Type: Classify Music vs Podcast")
     print("  • Genre: Classify specific music genres")
-    print("\n⚠️  Note: Audio quality model NOT trained")
-    print("  Quality is tracked but not used as a feature to ensure")
-    print("  the model works across all streaming qualities.")
     print("\nYou can now use these models for real-time traffic classification!")
     print("=" * 60 + "\n")
 

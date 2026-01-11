@@ -14,17 +14,28 @@ SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 
 # ADD YOUR PLAYLISTS HERE (just the ID from the URL)
 MUSIC_PLAYLISTS = [
-    "7IddiFVjAJbTLniq82Vusj",  # Pink Floyd Best Of
-    "5HpkkM0bOPDUgLcho7nCoZ", #Tame Impala best songs
-    "28nxGp2hLho3BA0dX3cb5P", #Best of Radiohead
-
-    "6Fs9lBMpHdqjvQ6wCPDnKc", #Peak Kannye
+    # "7IddiFVjAJbTLniq82Vusj",  # Pink Floyd Best Of
+    # "5HpkkM0bOPDUgLcho7nCoZ", #Tame Impala best songs
+    # "28nxGp2hLho3BA0dX3cb5P", #Best of Radiohead
+    # "6Fs9lBMpHdqjvQ6wCPDnKc", #Peak Kannye
+    # "5lBSVt2KMhM5EdSm6WSxpg", #thss iis kendrick lamar  (hip hop)
+    # "3IffYurXS0a9WC3SikI4TV", #travis(rap) chill vibes
+    # "35kZMub9UFGSheeghSXBfw", #(neo-psychedelic) Best of Tame Impala
+    # -------
+    # "0U3ACsVhROtNwwacDmhcuR", #(Progressive Rock) 25 King Crimson
+    # "4yebu47SKvUq8aWmTu1cRc",# david bowie Art Rock
+    #
+    # "4gHuAdOjAZHMb6WYKQhbLD",  # (neo-psychedelic) mgmt
+    "1mkinKlTq2OV9MCE5Nkpp9",
+    "10PXjjuLhwtYRZtJkgixLO",
+    "6Sv7aZ1fHZVEWfGdhqWn87",
+    "0yskWBwX31blZR9bVCBZTL",
 
 ]
 
 # ADD YOUR PODCAST SHOWS HERE (just the ID from the URL)
 PODCAST_SHOWS = [
-    "5CnDmMUG0S5bSSw612fs8C",  # Bad Friends
+    # "5CnDmMUG0S5bSSw612fs8C",  # Bad Friends
 ]
 
 # How long to play each track/episode (in seconds)
@@ -36,12 +47,13 @@ def get_artist_genre(sp, artist_id):
     try:
         artist = sp.artist(artist_id)
         genres = artist.get("genres", [])
+        print(genres)
         return genres[0] if genres else "unknown"
     except Exception as e:
         print(f" Genre fetch failed: {e}")
         return "unknown"
 
-def get_playlist_tracks(sp, playlist_id, limit=20):
+def get_playlist_tracks(sp, playlist_id, limit=50):
     """Get top tracks from a playlist"""
     print(f"\nFetching playlist: {playlist_id}")
     playlist = sp.playlist(playlist_id)
@@ -74,7 +86,7 @@ def get_playlist_tracks(sp, playlist_id, limit=20):
 
 
 
-def get_show_episodes(sp, show_id, limit=20):
+def get_show_episodes(sp, show_id, limit=50):
     """Get top episodes from a podcast show"""
     print(f"\nFetching show: {show_id}")
     show = sp.show(show_id)
@@ -156,14 +168,14 @@ def main():
     if MUSIC_PLAYLISTS:
         print(f"\n📀 Fetching {len(MUSIC_PLAYLISTS)} music playlist(s)...")
         for playlist_id in MUSIC_PLAYLISTS:
-            tracks = get_playlist_tracks(sp, playlist_id, limit=20)
+            tracks = get_playlist_tracks(sp, playlist_id, limit=50)
             all_content.extend(tracks)
 
     # Get podcast episodes
     if PODCAST_SHOWS:
         print(f"\n🎙️  Fetching {len(PODCAST_SHOWS)} podcast show(s)...")
         for show_id in PODCAST_SHOWS:
-            episodes = get_show_episodes(sp, show_id, limit=20)
+            episodes = get_show_episodes(sp, show_id, limit=50)
             all_content.extend(episodes)
 
     # Summary

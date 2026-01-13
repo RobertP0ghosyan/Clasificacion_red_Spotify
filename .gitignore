@@ -2,7 +2,7 @@ venv/
 .venv/
 .env
 dataset/
-pcap/
+pcap*/
 *.cvs
 *.pcap
 .cache

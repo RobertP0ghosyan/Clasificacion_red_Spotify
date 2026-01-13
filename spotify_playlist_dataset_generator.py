@@ -1,8 +1,7 @@
-import numpy as np
 import time
-import csv
 import os
-from scapy.all import sniff, wrpcap
+import threading
+from scapy.all import sniff, wrpcap, IP
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
@@ -15,12 +14,36 @@ SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 CAPTURE_DURATION = 60  # seconds
+IP_CACHE_FILE = "spotify_ips.json"
 
-# ADD YOUR PLAYLISTS HERE (just the ID from the URL)
+# Load cached Spotify IPs if available
+try:
+    import json
+
+    with open(IP_CACHE_FILE, 'r') as f:
+        cached_data = json.load(f)
+        SPOTIFY_IPS = set(cached_data.get('ips', []))
+        print(f"[*] Loaded {len(SPOTIFY_IPS)} cached Spotify IPs from {IP_CACHE_FILE}")
+except FileNotFoundError:
+    SPOTIFY_IPS = set()
+    print(f"[*] No cached IPs found. Will use fallback IP matching.")
+
+# Spotify IP prefixes (fallback if no cached IPs)
+SPOTIFY_IP_PREFIXES = [
+    "35.186.",  # Google Cloud (primary Spotify infrastructure)
+    "104.154.",  # Google Cloud
+    "35.184.",  # Google Cloud
+    "35.185.",  # Google Cloud
+    "104.199.",  # Google Cloud
+    "34.120.",  # Google Cloud
+    "34.117.",  # Google Cloud
+]
+
 MUSIC_PLAYLISTS = [
     # "7IddiFVjAJbTLniq82Vusj",  # Pink Floyd Best Of
     # "5HpkkM0bOPDUgLcho7nCoZ",  # Tame Impala best songs
     # "28nxGp2hLho3BA0dX3cb5P",  # THE BEST OF RADIOHEAD
+
     # "6Fs9lBMpHdqjvQ6wCPDnKc",  # Peak Kanye
     # "35kZMub9UFGSheeghSXBfw",  # (neo-psychedelic) Best of Tame Impala
     # "4gHuAdOjAZHMb6WYKQhbLD",  # (neo-psychedelic) mgmt need to change to indie -- tame impala alo indie
@@ -31,43 +54,113 @@ MUSIC_PLAYLISTS = [
     # "4yebu47SKvUq8aWmTu1cRc",  # david bowie Art Rock
 
     # edm
-    "1mkinKlTq2OV9MCE5Nkpp9",
-    "10PXjjuLhwtYRZtJkgixLO",
-    "6Sv7aZ1fHZVEWfGdhqWn87",
-    "0yskWBwX31blZR9bVCBZTL",
+    # "1mkinKlTq2OV9MCE5Nkpp9",
+    # "10PXjjuLhwtYRZtJkgixLO",
+    # "6Sv7aZ1fHZVEWfGdhqWn87",
+    # "0yskWBwX31blZR9bVCBZTL",
 ]
 
 # ADD YOUR PODCAST PLAYLISTS HERE (just the ID from the URL)
 # Using playlists ensures different episodes each time, better for ML diversity
 PODCAST_PLAYLISTS = [
-    # "5icMx65GADu8ICFmK7BwrL",  # Top 10 podcasts for life
-    # "38he99wNRz1QU6mrOAeyw9",  # podcasts that changed my life <3
-
-    # "4DX89yK57dk2m5OztHqNPK",  # best true crime podcasts
-    # "5lNiCLt9Rx2U3CGX2MxFcH",  # philosophy podcasts
+    "5icMx65GADu8ICFmK7BwrL",  # Top 10 podcasts for life
+    "38he99wNRz1QU6mrOAeyw9",  # podcasts that changed my life <3
+    "4DX89yK57dk2m5OztHqNPK",  # best true crime podcasts
+    "5lNiCLt9Rx2U3CGX2MxFcH",  # philosophy podcasts
 ]
+
+
+def is_spotify_packet(packet):
+    if not packet.haslayer(IP):
+        return False
+
+    src_ip = packet[IP].src
+    dst_ip = packet[IP].dst
+
+    if SPOTIFY_IPS:
+        if src_ip in SPOTIFY_IPS or dst_ip in SPOTIFY_IPS:
+            return True
+
+    for prefix in SPOTIFY_IP_PREFIXES:
+        if src_ip.startswith(prefix) or dst_ip.startswith(prefix):
+            return True
+
+    return False
+
+def discover_and_save_spotify_ips(interface="enp0s3", duration=10):
+    print("\n" + "=" * 60)
+    print("🔍 SPOTIFY IP DISCOVERY MODE")
+    print("=" * 60)
+    print(f"Scanning for {duration} seconds to find Spotify server IPs.")
+    print("Make sure Spotify is ACTIVELY STREAMING during this scan!")
+    print("=" * 60)
+
+    input("\n  Press ENTER to start discovery scan...")
+
+    discovered_ips = set()
+    packet_count = 0
+
+    def discovery_callback(packet):
+        nonlocal packet_count
+        packet_count += 1
+
+        if packet.haslayer(IP):
+            if len(packet) > 500:
+                src_ip = packet[IP].src
+                dst_ip = packet[IP].dst
+
+                if not (src_ip.startswith('192.168.') or src_ip.startswith('10.') or
+                        src_ip.startswith('172.') or src_ip.startswith('127.')):
+                    discovered_ips.add(src_ip)
+
+                if not (dst_ip.startswith('192.168.') or dst_ip.startswith('10.') or
+                        dst_ip.startswith('172.') or dst_ip.startswith('127.')):
+                    discovered_ips.add(dst_ip)
+
+    print(f"\n[*] Scanning for {duration} seconds...")
+    sniff(iface=interface, prn=discovery_callback, timeout=duration, store=False)
+
+    print(f"\n[+] Scan complete!")
+    print(f"    Total packets: {packet_count}")
+    print(f"    Potential Spotify IPs: {len(discovered_ips)}")
+
+    if discovered_ips:
+        print("\n Discovered IPs:")
+        for ip in sorted(discovered_ips):
+            print(f"      - {ip}")
+
+        cache_data = {
+            'ips': list(discovered_ips),
+            'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+            'duration': duration
+        }
+
+        with open(IP_CACHE_FILE, 'w') as f:
+            json.dump(cache_data, f, indent=2)
+
+        print(f"\n IPs saved to {IP_CACHE_FILE}")
+        return discovered_ips
+    else:
+        print("\n  No IPs discovered!")
+        return set()
+
 
 class SpotifyGenreClassificationDataset:
     def __init__(self, interface="enp0s3", tracks_per_playlist=10, episodes_per_playlist=10):
         self.spotify_client = None
         self.interface = interface
-        self.dataset_dir = 'dataset_classification'  # New folder for classification
-        self.pcap_dir = 'pcap_classification'  # New folder for classification
-        self.current_capture = []
-        self.last_packet_time = None
+        self.pcap_dir = 'pcap'
         self.tracks_per_playlist = tracks_per_playlist
         self.episodes_per_playlist = episodes_per_playlist
+        self.playback_error = None
+        self.client_ip = None  # Will be detected during capture
 
-        # Will store fetched content
         self.music_tracks = []
         self.podcast_episodes = []
 
-        os.makedirs(self.dataset_dir, exist_ok=True)
         os.makedirs(self.pcap_dir, exist_ok=True)
 
-        # CSV filename with timestamp for unique identification
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self.dataset_file = f"{self.dataset_dir}/spotify_classification_{timestamp}.csv"
 
     def setup_spotify_client(self):
         """Initialize Spotipy client"""
@@ -81,14 +174,13 @@ class SpotifyGenreClassificationDataset:
         ))
         print("    ✓ Spotify client authenticated")
 
-        # Verify active device
         devices = self.spotify_client.devices()
         if not devices['devices']:
-            raise Exception("No active Spotify device found! Please open Spotify on a device first.")
-        print(f"    ✓ Active device found: {devices['devices'][0]['name']}")
+            raise Exception("No active Spotify device found!")
+        print(f"    ✓ Active device: {devices['devices'][0]['name']}")
 
     def fetch_playlist_tracks(self):
-        """Fetch actual track URIs from playlists"""
+        """Fetch track URIs from playlists"""
         print("\n" + "=" * 70)
         print("FETCHING TRACKS FROM PLAYLISTS")
         print("=" * 70)
@@ -97,11 +189,9 @@ class SpotifyGenreClassificationDataset:
             try:
                 playlist = self.spotify_client.playlist(playlist_id)
                 print(f"\n📀 Playlist: {playlist['name']}")
-                print(f"   Total tracks: {playlist['tracks']['total']}")
 
                 results = self.spotify_client.playlist_tracks(playlist_id, limit=self.tracks_per_playlist)
 
-                tracks_added = 0
                 for item in results['items']:
                     if item['track']:
                         track = item['track']
@@ -112,17 +202,13 @@ class SpotifyGenreClassificationDataset:
                             'artist_id': track['artists'][0]['id']
                         })
                         print(f"   ✓ {track['artists'][0]['name']} - {track['name']}")
-                        tracks_added += 1
-
-                print(f"   Added {tracks_added} tracks from this playlist")
-
             except Exception as e:
-                print(f"   ✗ Error fetching playlist {playlist_id}: {e}")
+                print(f"   ✗ Error: {e}")
 
-        print(f"\n📊 Total music tracks collected: {len(self.music_tracks)}")
+        print(f"\n📊 Total music tracks: {len(self.music_tracks)}")
 
     def fetch_podcast_episodes(self):
-        """Fetch actual episode URIs from podcast playlists"""
+        """Fetch episode URIs from playlists"""
         print("\n" + "=" * 70)
         print("FETCHING EPISODES FROM PODCAST PLAYLISTS")
         print("=" * 70)
@@ -131,109 +217,22 @@ class SpotifyGenreClassificationDataset:
             try:
                 playlist = self.spotify_client.playlist(playlist_id)
                 print(f"\n🎙️  Playlist: {playlist['name']}")
-                print(f"   Total episodes: {playlist['tracks']['total']}")
 
                 results = self.spotify_client.playlist_tracks(playlist_id, limit=self.episodes_per_playlist)
 
-                episodes_added = 0
                 for item in results['items']:
                     if item['track']:
                         episode = item['track']
                         self.podcast_episodes.append({
                             'uri': episode['uri'],
                             'name': episode['name'],
-                            'show': episode.get('show', {}).get('name', 'Unknown Show')
+                            'show': episode.get('show', {}).get('name', 'Unknown')
                         })
                         print(f"   ✓ {episode['name']}")
-                        episodes_added += 1
-
-                print(f"   Added {episodes_added} episodes from this playlist")
-
             except Exception as e:
-                print(f"   ✗ Error fetching playlist {playlist_id}: {e}")
+                print(f"   ✗ Error: {e}")
 
-        print(f"\n📊 Total podcast episodes collected: {len(self.podcast_episodes)}")
-
-    def packet_callback(self, packet):
-        """Callback for each captured packet"""
-        arrival_time = packet.time
-        payload_size = len(packet)
-
-        inter_arrival = 0
-        if self.last_packet_time is not None:
-            inter_arrival = arrival_time - self.last_packet_time
-        self.last_packet_time = arrival_time
-
-        self.current_capture.append({
-            "arrival_time": arrival_time,
-            "payload_size": payload_size,
-            "inter_arrival": inter_arrival
-        })
-
-    def compute_flow_features(self):
-        """Compute traffic features for current capture"""
-        if not self.current_capture:
-            print("    Warning: No packets captured!")
-            return {
-                "pkt_size_mean": 0, "pkt_size_std": 0, "pkt_size_cv": 0,
-                "inter_mean": 0, "inter_std": 0, "inter_cv": 0, "p95_inter": 0,
-                "burst_mean": 0, "burst_max": 0, "num_silence_gaps": 0,
-                "silence_ratio": 0, "flow_duration": 0, "pkt_rate": 0
-            }
-
-        pkt_sizes = np.array([p["payload_size"] for p in self.current_capture])
-        inter_arrivals = np.array([p["inter_arrival"] for p in self.current_capture[1:]])
-        timestamps = np.array([p["arrival_time"] for p in self.current_capture])
-
-        # Packet size features
-        pkt_size_mean = np.mean(pkt_sizes)
-        pkt_size_std = np.std(pkt_sizes)
-        pkt_size_cv = pkt_size_std / pkt_size_mean if pkt_size_mean else 0
-
-        # Inter-packet arrival features
-        inter_mean = np.mean(inter_arrivals) if len(inter_arrivals) > 0 else 0
-        inter_std = np.std(inter_arrivals) if len(inter_arrivals) > 0 else 0
-        inter_cv = inter_std / inter_mean if inter_mean else 0
-        p95_inter = np.percentile(inter_arrivals, 95) if len(inter_arrivals) > 0 else 0
-
-        # Burst detection (packets within 0.5s)
-        BURST_WINDOW = 0.5
-        bursts = []
-        window = []
-        for t in timestamps:
-            window = [x for x in window if t - x <= BURST_WINDOW]
-            window.append(t)
-            bursts.append(len(window))
-        burst_mean = np.mean(bursts) if bursts else 0
-        burst_max = max(bursts) if bursts else 0
-
-        # Silence gaps (>2s)
-        SILENCE_THRESHOLD = 2.0
-        silence_gaps = [x for x in inter_arrivals if x > SILENCE_THRESHOLD]
-        num_silence_gaps = len(silence_gaps)
-        silence_ratio = sum(silence_gaps) / sum(inter_arrivals) if sum(inter_arrivals) > 0 else 0
-
-        # Flow duration
-        flow_duration = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
-
-        # Packet rate
-        pkt_rate = len(pkt_sizes) / flow_duration if flow_duration > 0 else 0
-
-        return {
-            "pkt_size_mean": pkt_size_mean,
-            "pkt_size_std": pkt_size_std,
-            "pkt_size_cv": pkt_size_cv,
-            "inter_mean": inter_mean,
-            "inter_std": inter_std,
-            "inter_cv": inter_cv,
-            "p95_inter": p95_inter,
-            "burst_mean": burst_mean,
-            "burst_max": burst_max,
-            "num_silence_gaps": num_silence_gaps,
-            "silence_ratio": silence_ratio,
-            "flow_duration": flow_duration,
-            "pkt_rate": pkt_rate
-        }
+        print(f"\n📊 Total podcast episodes: {len(self.podcast_episodes)}")
 
     def get_genre_for_track(self, artist_id):
         """Get genre from artist"""
@@ -253,33 +252,52 @@ class SpotifyGenreClassificationDataset:
             print(f"\n[{index + 1}/{total}] Capturing {content_type}")
             print(f"   {content_info['show']} - {content_info['name']}")
 
-        try:
-            self.spotify_client.start_playback(uris=[content_info['uri']], position_ms=0)
-            time.sleep(4)
-        except Exception as e:
-            print(f"    Playback error: {e}")
-            return None
-
+        # Reset capture state
         self.current_capture = []
-        self.last_packet_time = None
+        self.client_ip = None
+        self.playback_error = None
 
-        print(f"    Capturing packets for {CAPTURE_DURATION} seconds...")
+        def start_playback():
+            time.sleep(0.5)
+            try:
+                self.spotify_client.start_playback(uris=[content_info['uri']], position_ms=0)
+            except Exception as e:
+                self.playback_error = str(e)
+
+        playback_thread = threading.Thread(target=start_playback)
+        playback_thread.daemon = True
+        playback_thread.start()
+
+        print(f"    Capturing Spotify packets for {CAPTURE_DURATION} seconds...")
+        if SPOTIFY_IPS:
+            print(f"    Using {len(SPOTIFY_IPS)} cached Spotify IPs")
+
         packets = sniff(
             iface=self.interface,
-            filter="tcp port 443",
-            prn=self.packet_callback,
+            filter="",
             timeout=CAPTURE_DURATION,
             store=True,
         )
 
-        print(f"    Captured {len(packets)} packets")
+        if self.playback_error:
+            print(f"    Playback error: {self.playback_error}")
+            return None
+
+        spotify_packets = [p for p in packets if is_spotify_packet(p)]
+
+        print(f"    Total packets: {len(packets)}")
+        print(f"    Spotify packets: {len(spotify_packets)}")
+        if len(packets) > 0:
+            print(f"    Filter efficiency: {len(spotify_packets) / len(packets) * 100:.1f}%")
 
         # Save PCAP
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        safe_uri = content_info['uri'].replace(":", "_")
-        pcap_filename = f"{self.pcap_dir}/{timestamp}_{safe_uri}.pcap"
-        wrpcap(pcap_filename, packets)
-        print(f"    Saved PCAP: {pcap_filename}")
+        safe_name = content_info['name'][:30].replace('/', '_').replace('\\', '_')
+        pcap_filename = f"{self.pcap_dir}/{content_type}_{timestamp}_{safe_name}.pcap"
+
+        if spotify_packets:
+            wrpcap(pcap_filename, spotify_packets)
+            print(f"    Saved PCAP: {pcap_filename}")
 
         # Get genre and compute features
         if content_type == "music":
@@ -287,74 +305,24 @@ class SpotifyGenreClassificationDataset:
         else:
             genre = "podcast"
 
-        flow_features = self.compute_flow_features()
 
         return {
             "content_type": content_type,
             "content_id": content_info['uri'],
             "genre": genre,
-            "packets": self.current_capture,
-            **flow_features
         }
-
-    def save_dataset(self, data):
-        """Save captured data to CSV - optimized for genre classification"""
-        data = [d for d in data if d is not None]
-
-        if not data:
-            print("No data to save!")
-            return
-
-        file_exists = os.path.exists(self.dataset_file)
-
-        with open(self.dataset_file, "a", newline="") as f:
-            writer = csv.writer(f)
-
-            if not file_exists:
-                # CSV header: Classification columns
-                # content_id: Track duplicates and identify specific songs
-                # num_packets: Important feature - podcasts typically have more packets than music
-                writer.writerow([
-                    "content_type",  # Label 1: music or podcast
-                    "genre",  # Label 2: specific genre or 'podcast'
-                    "content_id",  # Track URI for duplicate detection
-                    "num_packets",  # Feature: differs between music and podcasts
-                    "pkt_size_mean", "pkt_size_std", "pkt_size_cv",
-                    "inter_mean", "inter_std", "inter_cv", "p95_inter",
-                    "burst_mean", "burst_max", "num_silence_gaps",
-                    "silence_ratio", "flow_duration", "pkt_rate"
-                ])
-
-            for item in data:
-                writer.writerow([
-                    item["content_type"],
-                    item["genre"],
-                    item["content_id"],
-                    len(item["packets"]),
-                    item["pkt_size_mean"],
-                    item["pkt_size_std"],
-                    item["pkt_size_cv"],
-                    item["inter_mean"],
-                    item["inter_std"],
-                    item["inter_cv"],
-                    item["p95_inter"],
-                    item["burst_mean"],
-                    item["burst_max"],
-                    item["num_silence_gaps"],
-                    item["silence_ratio"],
-                    item["flow_duration"],
-                    item["pkt_rate"]
-                ])
-
-        print(f"\nDataset saved to {self.dataset_file}")
 
     def generate_dataset(self):
         """Main method to generate the dataset"""
         try:
-            # Setup
             self.setup_spotify_client()
 
-            # Fetch all tracks and episodes from playlists
+            if not SPOTIFY_IPS and not SPOTIFY_IP_PREFIXES:
+                print("\n⚠️  WARNING: No Spotify IPs available!")
+                response = input("   Continue anyway? (y/n): ")
+                if response.lower() != 'y':
+                    return
+
             if MUSIC_PLAYLISTS:
                 self.fetch_playlist_tracks()
 
@@ -364,115 +332,78 @@ class SpotifyGenreClassificationDataset:
             total_items = len(self.music_tracks) + len(self.podcast_episodes)
 
             if total_items == 0:
-                print("\n✗ No content found! Add playlist IDs to the configuration.")
+                print("\n✗ No content found! Add playlist IDs.")
                 return
 
-            # Summary
-            print("\n" + "=" * 50)
+            print("\n" + "=" * 60)
             print("COLLECTION SUMMARY")
-            print("=" * 50)
+            print("=" * 60)
             print(f"Music tracks: {len(self.music_tracks)}")
             print(f"Podcast episodes: {len(self.podcast_episodes)}")
             print(f"Total items: {total_items}")
             print(f"Estimated time: ~{total_items * (CAPTURE_DURATION + 9) // 60} minutes")
-            print("\n🎯 Purpose: Genre/Content Classification")
-            print("   - Binary: Music vs Podcast")
-            print("   - Multi-class: Specific music genres + Podcast")
-            print("=" * 50)
 
-            input("\nMake sure Spotify is open on a device, then press Enter to start data collection...")
+            if SPOTIFY_IPS:
+                print(f"   Using {len(SPOTIFY_IPS)} cached Spotify IPs")
+            print("=" * 60)
 
-            # Capture data
-            captured_data = []
-            current_item = 0
+            input("\nMake sure Spotify is open, then press Enter...")
 
-            # Combine all content into one list
-            all_content = []
-            for track in self.music_tracks:
-                all_content.append(("music", track))
-            for episode in self.podcast_episodes:
-                all_content.append(("podcast", episode))
+            print(f"✓ PCAPs: {self.pcap_dir}")
+            print("=" * 60)
 
-            # Capture all content
-            for content_type, content_info in all_content:
-                content_data = self.capture_content_traffic(content_type, content_info, current_item, total_items)
-                if content_data:
-                    captured_data.append(content_data)
-
-                current_item += 1
-                if current_item < total_items:
-                    print("    Waiting 5 seconds before next capture...")
-                    time.sleep(5)
-
-            # Save the dataset
-            self.save_dataset(captured_data)
-
-            # Summary with genre breakdown
-            print("\n" + "=" * 50)
-            print("Dataset generation complete!")
-            print("=" * 50)
-            print(f"Total content items captured: {len(captured_data)}/{total_items}")
-
-            total_packets = sum(len(item["packets"]) for item in captured_data)
-            print(f"Total packets captured: {total_packets}")
-
-            # Genre distribution
-            print("\n📊 Genre Distribution:")
-            genre_counts = {}
-            for item in captured_data:
-                genre = item['genre']
-                genre_counts[genre] = genre_counts.get(genre, 0) + 1
-
-            for genre, count in sorted(genre_counts.items()):
-                print(f"   {genre}: {count} samples")
-
-            print("\n✓ Dataset saved to: " + self.dataset_file)
-            print("✓ PCAP files saved to: " + self.pcap_dir)
-            print("=" * 50)
-
-        except KeyboardInterrupt:
-            print("\n\nCapture interrupted by user")
-            print("Saving partial dataset...")
-            if captured_data:
-                self.save_dataset(captured_data)
         except Exception as e:
-            print(f"\n\nError during capture: {e}")
+            print(f"\n\nError: {e}")
             import traceback
             traceback.print_exc()
-            raise
 
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("SPOTIFY GENRE/CONTENT CLASSIFICATION DATASET GENERATOR")
-    print("=" * 70)
-    # print("\n🎯 PURPOSE:")
-    # print("   Generate dataset for ML classification tasks:")
-    # print("   1. Binary Classification: Music vs Podcast")
-    # print("   2. Multi-class Classification: Specific genres + Podcast")
-    print("\n  REQUIREMENTS:")
-    print("1. Run this script with sudo/administrator privileges")
-    print("2. Ensure Spotify credentials are set in .env file:")
-    print("3. Update MUSIC_PLAYLISTS and PODCAST_PLAYLISTS at top of file")
-    print("4. Install required packages:")
-    print("   pip install scapy spotipy python-dotenv numpy")
-    print("5. Have Spotify open and playing on a device")
-    print("=" * 70 + "\n")
+    import sys
 
-    # Ask how many tracks/episodes per playlist
-    print("\nConfigure how many items to fetch:")
-    while True:
-        try:
-            tracks_per = int(input("Tracks per music playlist (default 10): ").strip() or "10")
-            episodes_per = int(input("Episodes per podcast playlist (default 10): ").strip() or "10")
-            if tracks_per > 0 and episodes_per > 0:
-                break
-            print("Please enter positive numbers")
-        except ValueError:
-            print("Please enter valid numbers")
+    try:
+        if len(sys.argv) > 1 and sys.argv[1] == "--discover":
+            interface = input("Network interface (default: enp0s3): ").strip() or "enp0s3"
+            discover_and_save_spotify_ips(interface=interface, duration=10)
+        else:
+            print("=" * 70)
+            print("SPOTIFY GENRE/CONTENT CLASSIFICATION DATASET GENERATOR")
+            print("WITH DIRECTIONAL & TLS FEATURES")
+            print("=" * 70)
+            print("\n📋 REQUIREMENTS:")
+            print("1. sudo privileges")
+            print("2. Spotify credentials in .env")
+            print("3. Update MUSIC_PLAYLISTS and PODCAST_PLAYLISTS")
+            print("4. pip install scapy spotipy python-dotenv numpy")
+            print("\n💡 Run discovery first:")
+            print("   sudo python dataset_generator.py --discover")
+            if SPOTIFY_IPS:
+                print(f"\n✓ Using {len(SPOTIFY_IPS)} cached Spotify IPs")
+            print("=" * 70 + "\n")
 
-    generator = SpotifyGenreClassificationDataset(
-        tracks_per_playlist=tracks_per,
-        episodes_per_playlist=episodes_per
-    )
-    generator.generate_dataset()
+            print("\nConfigure capture:")
+            while True:
+                try:
+                    tracks = int(input("Tracks per playlist (default 10): ").strip() or "10")
+                    episodes = int(input("Episodes per playlist (default 10): ").strip() or "10")
+                    if tracks > 0 and episodes > 0:
+                        break
+                    print("Enter positive numbers")
+                except ValueError:
+                    print("Enter valid numbers")
+
+            generator = SpotifyGenreClassificationDataset(
+                tracks_per_playlist=tracks,
+                episodes_per_playlist=episodes
+            )
+            generator.generate_dataset()
+
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Interrupted")
+        exit(0)
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        exit(1)

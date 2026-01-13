@@ -11,7 +11,7 @@ import seaborn as sns
 import os
 
 # Configuration
-DATASET_DIR = 'dataset_classification'
+DATASET_DIR = 'dataset'
 MODEL_DIR = 'models'
 RESULTS_DIR = 'results'
 
@@ -64,7 +64,7 @@ def aggregate_flow_features(df):
     # Check for duplicates using content_id
     duplicates = df['content_id'].duplicated().sum()
     if duplicates > 0:
-        print(f"\n⚠️  Found {duplicates} duplicate content_id entries")
+        print(f"\n  Found {duplicates} duplicate content_id entries")
         print("   Keeping first occurrence of each...")
         df = df.drop_duplicates(subset='content_id', keep='first')
         print(f"   Cleaned dataset: {len(df)} samples")
@@ -82,20 +82,10 @@ def aggregate_flow_features(df):
 def get_feature_columns():
     """Define which columns to use as features for ML models"""
     return [
-        # Packet count - important for music vs podcast
-        'num_packets',
-        # Packet size features
-        'pkt_size_mean', 'pkt_size_std', 'pkt_size_cv',
-        # Inter-arrival time features
-        'inter_mean', 'inter_std', 'inter_cv', 'p95_inter',
-        # Burst features
-        'burst_mean', 'burst_max',
-        # Silence features
-        'num_silence_gaps', 'silence_ratio',
-        # Rate features
-        'pkt_rate',
-        # Flow statistics
-        'flow_duration'
+        "pkt_mean_size", "pkt_max_size",
+        "pkt_count_up", "pkt_count_down",
+        "burst_mean", "burst_max",
+        "bytes_ratio", "iat_std", "tls_record_mean"
     ]
 
 
@@ -174,94 +164,6 @@ def train_content_type_model(df, feature_cols):
     plt.close()
 
     return pipeline
-
-
-# QUALITY MODEL COMMENTED OUT - NOT NEEDED FOR GENRE CLASSIFICATION
-# def train_quality_model(df, feature_cols):
-#     """Train model to classify audio quality (low/normal/high/very-high)"""
-#     print("\n" + "=" * 60)
-#     print("Training Audio Quality Classifier")
-#     print("=" * 60)
-#
-#     # Note: Audio quality is tracked in filename but not as a feature
-#     # For genre classification, we want to classify regardless of quality
-#     # This helps the model generalize better across different streaming qualities
-#
-#     X = df[feature_cols]
-#     y = df['audio_quality']
-#
-#     print(f"Training samples: {len(X)}")
-#     print(f"Class distribution:\n{y.value_counts()}")
-#
-#     # Check if we have enough samples
-#     if len(y.unique()) < 2:
-#         print("WARNING: Only one quality level found! Skipping quality model.")
-#         return None
-#
-#     # Split data - handle case where we might not have enough samples for stratification
-#     try:
-#         X_train, X_test, y_train, y_test = train_test_split(
-#             X, y, test_size=0.2, random_state=42, stratify=y
-#         )
-#     except ValueError:
-#         print("Not enough samples for stratification, using random split")
-#         X_train, X_test, y_train, y_test = train_test_split(
-#             X, y, test_size=0.2, random_state=42
-#         )
-#
-#     # Build pipeline
-#     pipeline = Pipeline([
-#         ('scaler', StandardScaler()),
-#         ('clf', RandomForestClassifier(
-#             n_estimators=300,
-#             max_depth=20,
-#             min_samples_split=4,
-#             min_samples_leaf=2,
-#             random_state=42,
-#             n_jobs=-1
-#         ))
-#     ])
-#
-#     # Train
-#     print("\nTraining Random Forest...")
-#     pipeline.fit(X_train, y_train)
-#
-#     # Evaluate
-#     y_pred = pipeline.predict(X_test)
-#     accuracy = accuracy_score(y_test, y_pred)
-#
-#     print(f"\nTest Accuracy: {accuracy:.4f}")
-#     print("\nClassification Report:")
-#     print(classification_report(y_test, y_pred))
-#
-#     # Feature importance
-#     feature_importance = pd.DataFrame({
-#         'feature': feature_cols,
-#         'importance': pipeline.named_steps['clf'].feature_importances_
-#     }).sort_values('importance', ascending=False)
-#
-#     print("\nTop 5 Important Features:")
-#     print(feature_importance.head())
-#
-#     # Save model
-#     model_path = os.path.join(MODEL_DIR, 'audio_quality_model.pkl')
-#     joblib.dump(pipeline, model_path)
-#     print(f"\nModel saved to: {model_path}")
-#
-#     # Save confusion matrix
-#     cm = confusion_matrix(y_test, y_pred)
-#     plt.figure(figsize=(10, 8))
-#     sns.heatmap(cm, annot=True, fmt='d', cmap='Greens',
-#                 xticklabels=pipeline.classes_,
-#                 yticklabels=pipeline.classes_)
-#     plt.title('Audio Quality - Confusion Matrix')
-#     plt.ylabel('True Label')
-#     plt.xlabel('Predicted Label')
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(RESULTS_DIR, 'audio_quality_confusion_matrix.png'))
-#     plt.close()
-#
-#     return pipeline
 
 
 def train_genre_model(df, feature_cols):

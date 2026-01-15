@@ -22,7 +22,8 @@ class SpotifyNetworkCaptureGenerator:
                  pcap_save_dir,
                  audio_quality,
                  song_uris,
-                 capture_duration):
+                 capture_duration,
+                 num_sessions):
 
         self.spotify_client = None
         self.interface = interface
@@ -30,6 +31,7 @@ class SpotifyNetworkCaptureGenerator:
         self.audio_quality = audio_quality
         self.song_uris = song_uris
         self.capture_duration = capture_duration
+        self.num_sessions = num_sessions
 
         os.makedirs(self.pcap_save_dir, exist_ok=True)
                 
@@ -50,8 +52,15 @@ class SpotifyNetworkCaptureGenerator:
         
         # Start playback using Spotipy
         try:
-            self.spotify_client.start_playback(uris=[uri])
-            print(f"Started playback: {uri}")
+            # check for devices running spotify
+            devices = self.spotify_client.devices()["devices"]
+            if devices:
+                self.spotify_client.start_playback(uris=[uri], device_id=devices[0]["id"])
+                print(f"Started playback: {uri}")
+            else:
+                print("No device detected")
+                exit(1)
+                
         except Exception as e:
             print(f"Error starting playback: {e}")
             print("Attempting to continue with current playback...")
@@ -78,11 +87,12 @@ class SpotifyNetworkCaptureGenerator:
         try:
             # Setup
             self.setup_spotify_client()
-            
-            # Capture data for each song
-            for song_uri in self.song_uris:
-                self.capture_song_traffic(song_uri)
-            
+            for _ in range(self.num_sessions):
+                # Capture data for each song
+                for song_uri in self.song_uris:
+                    self.capture_song_traffic(song_uri)
+                
+        
         except KeyboardInterrupt:
             print("\n\nCapture interrupted by user")
         except Exception as e:
@@ -115,16 +125,17 @@ if __name__ == "__main__":
     for i, quality in enumerate(streaming_qualities):
         print(f"    {i+1}. {quality}")
 
-    quality_idx = int(input("\nSelect the quality configured in Spotify (1-4):").strip())
+    quality_idx = int(input(f"\nSelect the quality configured in Spotify (1-{len(streaming_qualities)}):").strip())
 
     print(f"    Selected quality: {streaming_qualities[quality_idx - 1]}")
 
-    input("\nStart the Spotify player in a device and press Enter to start data collection...")
+    input("\nStart Spotify on ONE device and press Enter to start data collection...")
 
     
     generator = SpotifyNetworkCaptureGenerator(interface=config["interface"],
                                                pcap_save_dir=config["pcap_save_dir"],
                                                audio_quality=streaming_qualities[quality_idx - 1],
                                                song_uris=config["song_uris"],
-                                               capture_duration=config["capture_duration"])
+                                               capture_duration=config["capture_duration"],
+                                               num_sessions=config["num_sessions"])
     generator.generate_capture()

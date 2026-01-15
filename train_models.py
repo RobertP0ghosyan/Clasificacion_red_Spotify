@@ -13,59 +13,130 @@ from sklearn.linear_model import Lasso
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import (
     train_test_split,
-    cross_val_score,
     learning_curve
 )
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
-from sklearn.pipeline import Pipeline
 
 from xgboost import XGBClassifier
 
 # -----------------------------
 # Configuration
 # -----------------------------
-DATASET_DIR = "dataset"
+DATASET_FILE = "dataset/spotify_features.csv"
 MODEL_DIR = "models"
 RESULTS_DIR = "results"
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Feature columns - THIS MUST MATCH EXACTLY IN BOTH SCRIPTS
+# Updated feature columns based on new extraction script
 FEATURES = [
-    "pkt_mean_size",
-    "pkt_max_size",
-    "pkt_count_up",
-    "pkt_count_down",
-    "burst_mean",
-    "burst_max",
-    "bytes_ratio",
+    # Basic packet statistics
+    "pkt_count",
+    "pkt_avg_len",
+    "pkt_max_len",
+    "pkt_std_len",
+    "pkt_rate",
+    "burst_rate",
+
+    # Peak detection features
+    "peak_count",
+    "peak_mean_height",
+    "peak_max_height",
+    "peak_frequency",
+    "peak_to_avg_ratio",
+
+    # Traffic distribution
+    "traffic_cv",
+    "traffic_std",
+    "traffic_skewness",
+    "active_ratio",
+
+    # Initial burst characteristics
+    "initial_burst_ratio",
+    "initial_burst_max",
+
+    # Inter-arrival times
+    "iat_mean",
     "iat_std",
-    "tls_record_mean",
+    "iat_median",
 ]
 
 
+# -----------------------------
 # Load dataset
+# -----------------------------
 def load_data():
-    files = [
-        f for f in os.listdir(DATASET_DIR)
-        if f.startswith("spotify_classification_") and f.endswith(".csv")
-    ]
+    if not os.path.exists(DATASET_FILE):
+        raise FileNotFoundError(f"Dataset not found: {DATASET_FILE}")
 
-    if not files:
-        raise FileNotFoundError("No dataset found")
+    df = pd.read_csv(DATASET_FILE)
+    print(f"Loaded {len(df)} rows from {DATASET_FILE}")
 
-    dfs = []
-    for f in files:
-        df = pd.read_csv(os.path.join(DATASET_DIR, f))
-        dfs.append(df)
-        print(f"Loaded {len(df)} rows from {f}")
+    # Check for missing features
+    missing_features = [f for f in FEATURES if f not in df.columns]
+    if missing_features:
+        print(f"⚠️ Warning: Missing features: {missing_features}")
+        # Use only available features
+        available_features = [f for f in FEATURES if f in df.columns]
+        return df, available_features
 
-    return pd.concat(dfs, ignore_index=True)
+    return df, FEATURES
 
 
-# Learning Curve Plot
+# -----------------------------
+# Correlation Matrix
+# -----------------------------
+def plot_correlation_matrix(df, features, title, filename):
+    corr = df[features].corr()
+
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        corr,
+        cmap="coolwarm",
+        annot=True,
+        fmt=".2f",
+        square=True,
+        linewidths=0.5,
+        cbar_kws={"shrink": 0.8}
+    )
+    plt.title(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(RESULTS_DIR, filename), dpi=300)
+    plt.close()
+
+    print(f"✓ Saved correlation heatmap: {filename}")
+
+
+# -----------------------------
+# Feature Importance Plot
+# -----------------------------
+def plot_feature_importance(model, feature_names, title, filename):
+    importances = model.feature_importances_
+    indices = np.argsort(importances)[::-1]
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(range(len(importances)), importances[indices])
+    plt.xticks(range(len(importances)), [feature_names[i] for i in indices], rotation=45, ha='right')
+    plt.xlabel('Features')
+    plt.ylabel('Importance')
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(os.path.join(RESULTS_DIR, filename), dpi=300)
+    plt.close()
+
+    print(f"✓ Saved feature importance: {filename}")
+
+    # Print top features
+    print(f"\nTop 10 Most Important Features for {title}:")
+    for i in range(min(10, len(indices))):
+        print(f"  {i + 1}. {feature_names[indices[i]]}: {importances[indices[i]]:.4f}")
+
+
+# -----------------------------
+# Learning Curve
+# -----------------------------
 def plot_learning_curve(model, X, y, title, filename):
     train_sizes, train_scores, val_scores = learning_curve(
         model,
@@ -78,75 +149,91 @@ def plot_learning_curve(model, X, y, title, filename):
     )
 
     plt.figure(figsize=(8, 6))
-    plt.plot(train_sizes, train_scores.mean(axis=1), label="Train")
-    plt.plot(train_sizes, val_scores.mean(axis=1), label="Validation")
+    plt.plot(train_sizes, train_scores.mean(axis=1), label="Train", marker='o')
+    plt.plot(train_sizes, val_scores.mean(axis=1), label="Validation", marker='s')
+    plt.fill_between(train_sizes,
+                     train_scores.mean(axis=1) - train_scores.std(axis=1),
+                     train_scores.mean(axis=1) + train_scores.std(axis=1),
+                     alpha=0.1)
+    plt.fill_between(train_sizes,
+                     val_scores.mean(axis=1) - val_scores.std(axis=1),
+                     val_scores.mean(axis=1) + val_scores.std(axis=1),
+                     alpha=0.1)
     plt.xlabel("Training Samples")
     plt.ylabel("F1 Score")
     plt.title(title)
     plt.legend()
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(RESULTS_DIR, filename))
+    plt.savefig(os.path.join(RESULTS_DIR, filename), dpi=300)
     plt.close()
 
+    print(f"✓ Saved learning curve: {filename}")
 
+
+# -----------------------------
+# Lasso Feature Selection
+# -----------------------------
 def lasso_feature_selection(X, y, alpha=0.01):
-    """Select features using Lasso regression"""
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
     lasso = Lasso(alpha=alpha, max_iter=5000, random_state=42)
     lasso.fit(X_scaled, pd.factorize(y)[0])
 
-    selected_features = X.columns[lasso.coef_ != 0].tolist()
+    # Get non-zero coefficients
+    coefficients = pd.DataFrame({
+        'feature': X.columns,
+        'coefficient': lasso.coef_
+    })
+
+    selected = X.columns[lasso.coef_ != 0].tolist()
 
     print("\n[Lasso Feature Selection]")
     print(f"  Alpha: {alpha}")
-    print(f"  Selected features: {selected_features}")
-    print(f"  Features dropped: {set(X.columns) - set(selected_features)}")
+    print(f"  Selected {len(selected)} features: {selected}")
+    print(f"  Dropped {len(X.columns) - len(selected)} features")
 
-    return selected_features
+    # Show top coefficients
+    top_features = coefficients.reindex(coefficients['coefficient'].abs().sort_values(ascending=False).index).head(10)
+    print("\n  Top 10 Features by Coefficient:")
+    for idx, row in top_features.iterrows():
+        print(f"    {row['feature']}: {row['coefficient']:.4f}")
+
+    return selected
 
 
-# CONTENT TYPE MODEL (RandomForest)
-def train_content_model(df):
+# -----------------------------
+# Content Type Model (RF)
+# -----------------------------
+def train_content_model(df, features):
     print("\n" + "=" * 60)
     print("=== Training Content Type Model (RandomForest) ===")
     print("=" * 60)
 
-    X = df[FEATURES]
+    X = df[features]
     y = df["content_type"]
 
-    print(f"\nDataset stats:")
-    print(f"  Total samples: {len(df)}")
-    print(f"  Class distribution:\n{y.value_counts()}")
+    print(f"\nDataset: {len(df)} samples")
+    print(f"Class distribution:\n{y.value_counts()}")
 
-    # Feature selection
-    selected_features = lasso_feature_selection(X, y, alpha=0.01)
+    selected_features = lasso_feature_selection(X, y)
 
-    # Fallback safety - ensure minimum features
     if len(selected_features) < 3:
-        print("⚠️  Too few features selected, using all features")
-        selected_features = FEATURES
+        print("⚠️ Too few features selected, using all features")
+        selected_features = features
 
-    X = df[selected_features]
-
-    # Save selected features for prediction script
     joblib.dump(
         selected_features,
         os.path.join(MODEL_DIR, "content_lasso_features.pkl")
     )
-    print(f"\n✓ Saved selected features to content_lasso_features.pkl")
+
+    X = df[selected_features]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, stratify=y, test_size=0.2, random_state=42
     )
 
-    print(f"\nTrain/Test split:")
-    print(f"  Train: {len(X_train)} samples")
-    print(f"  Test:  {len(X_test)} samples")
-
-    # Train model
     model = RandomForestClassifier(
         n_estimators=300,
         max_depth=8,
@@ -159,48 +246,46 @@ def train_content_model(df):
         n_jobs=-1
     )
 
-    print("\nTraining RandomForest...")
     model.fit(X_train, y_train)
 
-    # Evaluate
     y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
 
-    print(f"\n{'=' * 60}")
-    print(f"Content Type Model Results:")
-    print(f"{'=' * 60}")
-    print(f"Accuracy: {acc:.4f}")
+    print("\n[Model Performance]")
+    print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
     print(f"OOB Score: {model.oob_score_:.4f}")
-    print(f"\n{classification_report(y_test, y_pred)}")
+    print("\n", classification_report(y_test, y_pred))
 
-    # Feature importance
-    feature_importance = pd.DataFrame({
-        'feature': selected_features,
-        'importance': model.feature_importances_
-    }).sort_values('importance', ascending=False)
-
-    print("\nFeature Importance:")
-    for _, row in feature_importance.iterrows():
-        print(f"  {row['feature']:20s}: {row['importance']:.4f}")
-
-    # Save model
     joblib.dump(model, os.path.join(MODEL_DIR, "content_type_rf.pkl"))
-    print(f"\n✓ Model saved to content_type_rf.pkl")
+    print(f"✓ Saved model: content_type_rf.pkl")
 
-    # Confusion Matrix
+    # Confusion matrix
     cm = confusion_matrix(y_test, y_pred)
     plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
-                xticklabels=model.classes_,
-                yticklabels=model.classes_)
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=model.classes_,
+        yticklabels=model.classes_
+    )
     plt.title("Content Type Confusion Matrix")
-    plt.ylabel("True Label")
-    plt.xlabel("Predicted Label")
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
     plt.tight_layout()
-    plt.savefig(os.path.join(RESULTS_DIR, "content_type_cm.png"))
+    plt.savefig(os.path.join(RESULTS_DIR, "content_type_cm.png"), dpi=300)
     plt.close()
+    print(f"✓ Saved confusion matrix: content_type_cm.png")
 
-    # Learning Curve
+    # Feature importance
+    plot_feature_importance(
+        model,
+        selected_features,
+        "Content Type - Feature Importance (RF)",
+        "content_feature_importance.png"
+    )
+
+    # Learning curve
     plot_learning_curve(
         model,
         X_train,
@@ -210,49 +295,45 @@ def train_content_model(df):
     )
 
 
-# GENRE MODEL (XGBoost)
-def train_genre_model(df):
+# -----------------------------
+# Genre Model (XGBoost)
+# -----------------------------
+def train_genre_model(df, features):
     print("\n" + "=" * 60)
     print("=== Training Genre Model (XGBoost) ===")
     print("=" * 60)
 
-    music_df = df[df["content_type"] == "music"].copy()
-    music_df = music_df[music_df["genre"] != "unknown"]
+    music_df = df[(df["content_type"] == "music") & (df["genre"] != "unknown")]
 
-    X = music_df[FEATURES]
+    if len(music_df) == 0:
+        print("⚠️ No music data available for genre classification")
+        return
+
+    X = music_df[features]
     y = music_df["genre"]
 
-    # Encode labels
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
+    print(f"\nDataset: {len(music_df)} music samples")
+    print(f"Genre distribution:\n{y.value_counts()}")
 
-    joblib.dump(
-        label_encoder,
-        os.path.join(MODEL_DIR, "genre_label_encoder.pkl")
-    )
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y)
 
-    # 🔥 LASSO FOR GENRE FEATURES (NEW)
-    genre_features = lasso_feature_selection(X, y, alpha=0.01)
+    joblib.dump(le, os.path.join(MODEL_DIR, "genre_label_encoder.pkl"))
+
+    genre_features = lasso_feature_selection(X, y)
 
     if len(genre_features) < 3:
-        print("⚠️ Too few genre features selected, using all features")
-        genre_features = FEATURES
+        genre_features = features
 
-    X = music_df[genre_features]
-
-    # Save genre features
     joblib.dump(
         genre_features,
         os.path.join(MODEL_DIR, "genre_lasso_features.pkl")
     )
-    print("✓ Saved genre_lasso_features.pkl")
+
+    X = music_df[genre_features]
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y_encoded,
-        stratify=y_encoded,
-        test_size=0.2,
-        random_state=42
+        X, y_enc, stratify=y_enc, test_size=0.2, random_state=42
     )
 
     model = XGBClassifier(
@@ -273,59 +354,98 @@ def train_genre_model(df):
 
     y_pred = model.predict(X_test)
 
-    y_test_decoded = label_encoder.inverse_transform(y_test)
-    y_pred_decoded = label_encoder.inverse_transform(y_pred)
-
-    print("\nGenre Classification Report:")
-    print(classification_report(y_test_decoded, y_pred_decoded))
-
-    joblib.dump(
-        model,
-        os.path.join(MODEL_DIR, "genre_xgboost.pkl")
+    print("\n[Model Performance]")
+    print(
+        classification_report(
+            le.inverse_transform(y_test),
+            le.inverse_transform(y_pred)
+        )
     )
-    print("✓ Model saved to genre_xgboost.pkl")
+
+    joblib.dump(model, os.path.join(MODEL_DIR, "genre_xgboost.pkl"))
+    print(f"✓ Saved model: genre_xgboost.pkl")
+
+    # Confusion matrix
+    cm = confusion_matrix(y_test, y_pred)
+    plt.figure(figsize=(8, 7))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Greens",
+        xticklabels=le.classes_,
+        yticklabels=le.classes_
+    )
+    plt.title("Genre Classification Confusion Matrix")
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.tight_layout()
+    plt.savefig(os.path.join(RESULTS_DIR, "genre_cm.png"), dpi=300)
+    plt.close()
+    print(f"✓ Saved confusion matrix: genre_cm.png")
+
+    # Feature importance
+    plot_feature_importance(
+        model,
+        genre_features,
+        "Genre Classification - Feature Importance (XGBoost)",
+        "genre_feature_importance.png"
+    )
 
 
-
+# -----------------------------
 # MAIN
+# -----------------------------
 def main():
     print("\n" + "=" * 60)
     print("    SPOTIFY TRAFFIC CLASSIFICATION TRAINING")
+    print("    With Peak Detection & Traffic Pattern Features")
     print("=" * 60)
 
-    df = load_data()
+    df, features = load_data()
 
-    # Remove duplicates if content_id exists
+    print(f"\nUsing {len(features)} features:")
+    for f in features:
+        print(f"  - {f}")
+
     if "content_id" in df.columns:
-        before = len(df)
         df = df.drop_duplicates("content_id")
-        print(f"\nRemoved {before - len(df)} duplicate content_ids")
+        print(f"\nRemoved duplicates, {len(df)} unique samples remaining")
 
-    # Verify required columns
-    required_cols = FEATURES + ["content_type"]
-    missing = set(required_cols) - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+    # Handle missing values
+    print("\nChecking for missing values...")
+    missing = df[features].isnull().sum()
+    if missing.any():
+        print("Missing values found:")
+        print(missing[missing > 0])
+        df = df.dropna(subset=features)
+        print(f"Dropped rows with missing values, {len(df)} samples remaining")
+    else:
+        print("No missing values found")
 
-    print(f"\n✓ Dataset ready: {len(df)} samples with {len(FEATURES)} features")
+    plot_correlation_matrix(
+        df,
+        features,
+        "Feature Correlation Matrix (All Traffic)",
+        "feature_correlation_heatmap.png"
+    )
 
-    # Train models
-    train_content_model(df)
-    train_genre_model(df)
+    if len(df[df["content_type"] == "music"]) > 0:
+        plot_correlation_matrix(
+            df[df["content_type"] == "music"],
+            features,
+            "Feature Correlation Matrix (Music Only)",
+            "feature_correlation_music.png"
+        )
+
+    train_content_model(df, features)
+    train_genre_model(df, features)
 
     print("\n" + "=" * 60)
     print("=== TRAINING COMPLETE ===")
     print("=" * 60)
-    print(f"Models saved to: {MODEL_DIR}/")
-    print(f"  - content_type_rf.pkl")
-    print(f"  - genre_xgboost.pkl")
-    print(f"  - genre_label_encoder.pkl")
-    print(f"  - content_lasso_features.pkl")
-    print(f"\nPlots saved to: {RESULTS_DIR}/")
-    print(f"  - content_type_cm.png")
-    print(f"  - genre_cm.png")
-    print(f"  - lc_content_rf.png")
-    print(f"  - lc_genre_xgb.png")
+    print(f"\nModels saved in: {MODEL_DIR}/")
+    print(f"Results saved in: {RESULTS_DIR}/")
 
 
 if __name__ == "__main__":

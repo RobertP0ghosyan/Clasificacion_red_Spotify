@@ -1,110 +1,207 @@
 #!/usr/bin/env python3
 """
 Enhanced PCAP Feature Extractor for Spotify Traffic Classification
-Extracts directional, TLS, and temporal features from pcap files
+Extracts temporal features and peak detection from pcap files
 """
 
 import os
-import json
 import numpy as np
 import pandas as pd
-from scapy.all import rdpcap, IP, TCP, Raw
+from scapy.all import rdpcap
 from pathlib import Path
 import warnings
 from scipy import stats
+from scipy.signal import find_peaks
 
 warnings.filterwarnings('ignore')
 
 # Configuration
-SPOTIFY_IPS_FILE = "spotify_ips.json"
 PCAP_ROOT = "pcap"
 OUTPUT_FILE = "spotify_features.csv"
 
 
-def load_spotify_ips():
-    """Load Spotify IPs from JSON file"""
-    try:
-        with open(SPOTIFY_IPS_FILE, 'r') as f:
-            data = json.load(f)
-            return data['ips']
-    except Exception as e:
-        print(f"Error loading {SPOTIFY_IPS_FILE}: {e}")
-        print("Using default IP")
-        return ["35.186.224.26"]
-
-
-def is_tls_handshake(payload):
-    """Check if payload contains TLS handshake (content type 0x16)"""
-    if len(payload) < 5:
-        return False
-    return payload[0] == 0x16
-
-
-def extract_tls_record_sizes(payload):
-    """Extract TLS record sizes from payload"""
-    records = []
-    offset = 0
-
-    while offset + 5 <= len(payload):
-        content_type = payload[offset]
-        # TLS content types: 0x14-0x18
-        if content_type not in [0x14, 0x15, 0x16, 0x17, 0x18]:
-            break
-
-        # Record length is bytes 3-4 (big endian)
-        record_length = (payload[offset + 3] << 8) | payload[offset + 4]
-        records.append(record_length)
-
-        # Move to next record (5 byte header + record length)
-        offset += 5 + record_length
-
-        if offset >= len(payload):
-            break
-
-    return records
-
-
-def calculate_bursts(timestamps, burst_gap=0.1):
+def calculate_peaks(intervals, counts, prominence_threshold=0.3):
     """
-    Calculate burst sizes (consecutive packets with gap < burst_gap seconds)
+    Detect and analyze peaks in packet flow
 
     Parameters:
-    - timestamps: list of packet timestamps
-    - burst_gap: maximum gap between packets in a burst (default 0.1 seconds)
+    - intervals: time intervals (seconds)
+    - counts: packet counts per interval
+    - prominence_threshold: minimum prominence for peak detection (relative to max)
 
     Returns:
-    - List of burst sizes
+    - Dictionary of peak statistics
     """
-    if len(timestamps) <= 1:
-        return [1]
+    if len(counts) == 0 or max(counts) == 0:
+        return {
+            'peak_count': 0,
+            'peak_mean_height': 0,
+            'peak_max_height': 0,
+            'peak_mean_prominence': 0,
+            'peak_total_area': 0,
+            'peak_frequency': 0
+        }
 
-    bursts = []
-    current_burst = 1
+    # Normalize counts for peak detection
+    max_count = max(counts)
+    prominence = prominence_threshold * max_count
 
-    for i in range(1, len(timestamps)):
-        gap = timestamps[i] - timestamps[i - 1]
+    # Find peaks with minimum prominence
+    peaks, properties = find_peaks(counts, prominence=prominence)
 
-        if gap < burst_gap:
-            current_burst += 1
-        else:
-            bursts.append(current_burst)
-            current_burst = 1
+    if len(peaks) == 0:
+        return {
+            'peak_count': 0,
+            'peak_mean_height': 0,
+            'peak_max_height': 0,
+            'peak_mean_prominence': 0,
+            'peak_total_area': 0,
+            'peak_frequency': 0
+        }
 
-    # Add last burst
-    bursts.append(current_burst)
+    # Calculate peak heights
+    peak_heights = [counts[p] for p in peaks]
 
-    return bursts
+    # Calculate total area under peaks (approximate)
+    peak_total_area = sum(peak_heights)
+
+    # Peak frequency (peaks per second)
+    duration = len(intervals)
+    peak_frequency = len(peaks) / duration if duration > 0 else 0
+
+    return {
+        'peak_count': len(peaks),
+        'peak_mean_height': np.mean(peak_heights),
+        'peak_max_height': max(peak_heights),
+        'peak_mean_prominence': np.mean(properties['prominences']),
+        'peak_total_area': peak_total_area,
+        'peak_frequency': peak_frequency
+    }
 
 
-def extract_features(pcap_file, genre, content_type, spotify_ips):
+def get_packets_per_second(packets, interval=1.0):
     """
-    Extract directional, TLS, and temporal features from pcap file
+    Calculate packet counts per time interval
+
+    Parameters:
+    - packets: list of scapy packets
+    - interval: time interval in seconds (default 1.0)
+
+    Returns:
+    - intervals: array of time points
+    - counts: array of packet counts per interval
+    """
+    if len(packets) == 0:
+        return np.array([]), np.array([])
+
+    # Get timestamps
+    timestamps = [float(pkt.time) for pkt in packets]
+    start_time = min(timestamps)
+    end_time = max(timestamps)
+
+    # Create intervals
+    duration = int(end_time - start_time) + 1
+    intervals = np.arange(0, duration, interval)
+    counts = np.zeros(duration)
+
+    # Count packets in each interval
+    for ts in timestamps:
+        idx = int((ts - start_time) / interval)
+        if idx < len(counts):
+            counts[idx] += 1
+
+    return intervals, counts
+
+
+def calculate_traffic_distribution(counts):
+    """
+    Calculate traffic distribution statistics
+
+    Parameters:
+    - counts: packet counts per time interval
+
+    Returns:
+    - Dictionary of distribution features
+    """
+    if len(counts) == 0 or sum(counts) == 0:
+        return {
+            'traffic_std': 0,
+            'traffic_cv': 0,
+            'traffic_skewness': 0,
+            'traffic_kurtosis': 0,
+            'active_ratio': 0,
+            'peak_to_avg_ratio': 0
+        }
+
+    # Filter non-zero counts for active periods
+    active_counts = counts[counts > 0]
+    active_ratio = len(active_counts) / len(counts) if len(counts) > 0 else 0
+
+    # Calculate statistics
+    mean_count = np.mean(counts)
+    std_count = np.std(counts)
+    cv = std_count / mean_count if mean_count > 0 else 0
+
+    # Peak to average ratio
+    max_count = max(counts)
+    peak_to_avg = max_count / mean_count if mean_count > 0 else 0
+
+    # Skewness and kurtosis (shape of distribution)
+    skewness = stats.skew(counts) if len(counts) > 2 else 0
+    kurtosis = stats.kurtosis(counts) if len(counts) > 3 else 0
+
+    return {
+        'traffic_std': std_count,
+        'traffic_cv': cv,
+        'traffic_skewness': skewness,
+        'traffic_kurtosis': kurtosis,
+        'active_ratio': active_ratio,
+        'peak_to_avg_ratio': peak_to_avg
+    }
+
+
+def calculate_initial_burst(counts, window=10):
+    """
+    Calculate initial burst characteristics (first N seconds)
+
+    Parameters:
+    - counts: packet counts per time interval
+    - window: initial window size in seconds
+
+    Returns:
+    - Dictionary of initial burst features
+    """
+    if len(counts) == 0:
+        return {
+            'initial_burst_total': 0,
+            'initial_burst_avg': 0,
+            'initial_burst_max': 0,
+            'initial_burst_ratio': 0
+        }
+
+    # Get first N seconds
+    window_size = min(window, len(counts))
+    initial_window = counts[:window_size]
+
+    initial_total = sum(initial_window)
+    total_packets = sum(counts)
+
+    return {
+        'initial_burst_total': initial_total,
+        'initial_burst_avg': np.mean(initial_window),
+        'initial_burst_max': max(initial_window) if len(initial_window) > 0 else 0,
+        'initial_burst_ratio': initial_total / total_packets if total_packets > 0 else 0
+    }
+
+
+def extract_features(pcap_file, genre, content_type):
+    """
+    Extract features from pcap file including peak detection
 
     Parameters:
     - pcap_file: path to pcap file
     - genre: music genre (folder name)
     - content_type: type of content (podcast/music)
-    - spotify_ips: list of Spotify IP addresses
 
     Returns:
     - Dictionary of features
@@ -115,146 +212,83 @@ def extract_features(pcap_file, genre, content_type, spotify_ips):
         print(f"Error reading {pcap_file}: {e}")
         return None
 
-    # Filter packets with any Spotify IP (source or destination)
-    filtered_pkts = [pkt for pkt in packets if IP in pkt and
-                     (pkt[IP].src in spotify_ips or pkt[IP].dst in spotify_ips)]
-
-    if len(filtered_pkts) == 0:
-        print(f"No packets found with Spotify IPs in {pcap_file}")
+    if len(packets) == 0:
+        print(f"No packets found in {pcap_file}")
         return None
 
-    # Separate upstream and downstream packets
-    upstream_pkts = []  # Client to Spotify
-    downstream_pkts = []  # Spotify to Client
-    all_pkt_sizes = []
-    upstream_sizes = []
-    downstream_sizes = []
-    inter_arrivals = []
-    tls_record_sizes = []
-    timestamps = []
+    # Get packet sizes
+    pkt_sizes = [len(pkt) for pkt in packets]
 
-    for pkt in filtered_pkts:
-        pkt_size = len(pkt)
-        all_pkt_sizes.append(pkt_size)
-        timestamps.append(float(pkt.time))
+    # Get timestamps
+    timestamps = [float(pkt.time) for pkt in packets]
 
-        # Determine direction
-        if pkt[IP].dst in spotify_ips:
-            # Client to server (upstream)
-            upstream_pkts.append(pkt_size)
-            upstream_sizes.append(pkt_size)
-        else:
-            # Server to client (downstream)
-            downstream_pkts.append(pkt_size)
-            downstream_sizes.append(pkt_size)
+    # Calculate flow duration
+    flow_duration = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
 
-        # Extract TLS record sizes
-        if Raw in pkt:
-            payload = bytes(pkt[Raw].load)
-            if is_tls_handshake(payload) or (len(payload) >= 5 and payload[0] in [0x14, 0x15, 0x16, 0x17, 0x18]):
-                records = extract_tls_record_sizes(payload)
-                tls_record_sizes.extend(records)
+    # Get packets per second
+    intervals, counts = get_packets_per_second(packets, interval=1.0)
+
+    # Calculate packet rate (packets per second)
+    pkt_rate = len(packets) / flow_duration if flow_duration > 0 else 0
+
+    # Calculate burst rate (using 0.1 second intervals)
+    _, burst_counts = get_packets_per_second(packets, interval=0.1)
+    burst_rate = np.mean(burst_counts[burst_counts > 0]) if len(burst_counts[burst_counts > 0]) > 0 else 0
+
+    # Peak detection features
+    peak_features = calculate_peaks(intervals, counts, prominence_threshold=0.3)
+
+    # Traffic distribution features
+    distribution_features = calculate_traffic_distribution(counts)
+
+    # Initial burst features
+    initial_features = calculate_initial_burst(counts, window=10)
 
     # Calculate inter-arrival times
-    if len(timestamps) > 1:
-        inter_arrivals = np.diff(timestamps)
-
-    # Calculate burst statistics
-    bursts = calculate_bursts(timestamps, burst_gap=0.1)
-
-    # Flow duration and packet rate
-    flow_duration = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
-    packet_rate = len(filtered_pkts) / flow_duration if flow_duration > 0 else 0
-
-    # Calculate bytes statistics
-    upstream_bytes = sum(upstream_pkts)
-    downstream_bytes = sum(downstream_pkts)
-    bytes_ratio = downstream_bytes / upstream_bytes if upstream_bytes > 0 else 0
-    total_bytes = upstream_bytes + downstream_bytes
-
-    # Packet count ratio
-    pkt_count_ratio = len(downstream_pkts) / len(upstream_pkts) if len(upstream_pkts) > 0 else 0
-
-    # Coefficient of Variation for packet sizes (measure of consistency)
-    pkt_cv = np.std(all_pkt_sizes) / np.mean(all_pkt_sizes) if len(all_pkt_sizes) > 0 and np.mean(
-        all_pkt_sizes) > 0 else 0
-
-    # Separate CV for downstream (music should be more consistent)
-    downstream_cv = np.std(downstream_sizes) / np.mean(downstream_sizes) if len(downstream_sizes) > 0 and np.mean(
-        downstream_sizes) > 0 else 0
-
-    # Burst statistics
-    burst_count = len(bursts)
-    burst_frequency = burst_count / flow_duration if flow_duration > 0 else 0
-    burst_cv = np.std(bursts) / np.mean(bursts) if len(bursts) > 0 and np.mean(bursts) > 0 else 0
-
-    # Inter-arrival time statistics
-    iat_mean = np.mean(inter_arrivals) if len(inter_arrivals) > 0 else 0
-    iat_median = np.median(inter_arrivals) if len(inter_arrivals) > 0 else 0
-    iat_cv = np.std(inter_arrivals) / np.mean(inter_arrivals) if len(inter_arrivals) > 0 and iat_mean > 0 else 0
-
-    # TLS record statistics
-    tls_cv = np.std(tls_record_sizes) / np.mean(tls_record_sizes) if len(tls_record_sizes) > 0 and np.mean(
-        tls_record_sizes) > 0 else 0
-
-    # Large packet ratio (packets > 1400 bytes, typical for full data packets)
-    large_pkt_count = sum(1 for size in downstream_sizes if size > 1400)
-    large_pkt_ratio = large_pkt_count / len(downstream_sizes) if len(downstream_sizes) > 0 else 0
-
-    # Small packet ratio (packets < 100 bytes, typical for ACKs)
-    small_pkt_count = sum(1 for size in all_pkt_sizes if size < 100)
-    small_pkt_ratio = small_pkt_count / len(all_pkt_sizes) if len(all_pkt_sizes) > 0 else 0
-
-    # Downstream throughput (bytes per second)
-    downstream_throughput = downstream_bytes / flow_duration if flow_duration > 0 else 0
+    inter_arrivals = np.diff(timestamps) if len(timestamps) > 1 else []
 
     # Calculate features
     features = {
         # Basic packet statistics
-        'pkt_mean_size': np.mean(all_pkt_sizes) if all_pkt_sizes else 0,
-        'pkt_max_size': max(all_pkt_sizes) if all_pkt_sizes else 0,
-        'pkt_min_size': min(all_pkt_sizes) if all_pkt_sizes else 0,
-        'pkt_std_size': np.std(all_pkt_sizes) if all_pkt_sizes else 0,
-        'pkt_cv': pkt_cv,  # NEW: Coefficient of variation
-
-        # Directional packet counts
-        'pkt_count_up': len(upstream_pkts),
-        'pkt_count_down': len(downstream_pkts),
-        'pkt_count_ratio': pkt_count_ratio,  # NEW: Down/Up packet ratio
-
-        # Directional packet sizes
-        'downstream_mean_size': np.mean(downstream_sizes) if downstream_sizes else 0,
-        'downstream_cv': downstream_cv,  # NEW: Downstream size consistency
-        'upstream_mean_size': np.mean(upstream_sizes) if upstream_sizes else 0,
-
-        # Burst characteristics
-        'burst_mean': np.mean(bursts) if bursts else 0,
-        'burst_max': max(bursts) if bursts else 0,
-        'burst_count': burst_count,  # NEW: Number of bursts
-        'burst_frequency': burst_frequency,  # NEW: Bursts per second
-        'burst_cv': burst_cv,  # NEW: Burst consistency
-
-        # Bytes and throughput
-        'bytes_ratio': bytes_ratio,
-        'total_bytes': total_bytes,  # NEW: Total data transferred
-        'downstream_throughput': downstream_throughput,  # NEW: Bytes/sec downstream
-
-        # Inter-arrival times
-        'iat_mean': iat_mean,  # NEW: Mean inter-arrival time
-        'iat_median': iat_median,  # NEW: Median inter-arrival time
-        'iat_std': np.std(inter_arrivals) if len(inter_arrivals) > 0 else 0,
-        'iat_cv': iat_cv,  # NEW: IAT consistency
-
-        # TLS features
-        'tls_record_mean': np.mean(tls_record_sizes) if tls_record_sizes else 0,
-        'tls_record_count': len(tls_record_sizes),  # NEW: Number of TLS records
-        'tls_cv': tls_cv,  # NEW: TLS record size consistency
+        'pkt_count': len(packets),
+        'pkt_avg_len': np.mean(pkt_sizes),
+        'pkt_min_len': min(pkt_sizes),
+        'pkt_max_len': max(pkt_sizes),
+        'pkt_std_len': np.std(pkt_sizes),
 
         # Flow characteristics
-        'flow_duration': flow_duration,  # NEW: Total flow duration
-        'packet_rate': packet_rate,  # NEW: Packets per second
-        'large_pkt_ratio': large_pkt_ratio,  # NEW: Ratio of large packets
-        'small_pkt_ratio': small_pkt_ratio,  # NEW: Ratio of small packets
+        'flow_duration': flow_duration,
+        'pkt_rate': pkt_rate,
+        'burst_rate': burst_rate,
+
+        # Peak detection features
+        'peak_count': peak_features['peak_count'],
+        'peak_mean_height': peak_features['peak_mean_height'],
+        'peak_max_height': peak_features['peak_max_height'],
+        'peak_mean_prominence': peak_features['peak_mean_prominence'],
+        'peak_total_area': peak_features['peak_total_area'],
+        'peak_frequency': peak_features['peak_frequency'],
+
+        # Traffic distribution
+        'traffic_std': distribution_features['traffic_std'],
+        'traffic_cv': distribution_features['traffic_cv'],
+        'traffic_skewness': distribution_features['traffic_skewness'],
+        'traffic_kurtosis': distribution_features['traffic_kurtosis'],
+        'active_ratio': distribution_features['active_ratio'],
+        'peak_to_avg_ratio': distribution_features['peak_to_avg_ratio'],
+
+        # Initial burst characteristics
+        'initial_burst_total': initial_features['initial_burst_total'],
+        'initial_burst_avg': initial_features['initial_burst_avg'],
+        'initial_burst_max': initial_features['initial_burst_max'],
+        'initial_burst_ratio': initial_features['initial_burst_ratio'],
+
+        # Inter-arrival times
+        'iat_mean': np.mean(inter_arrivals) if len(inter_arrivals) > 0 else 0,
+        'iat_median': np.median(inter_arrivals) if len(inter_arrivals) > 0 else 0,
+        'iat_std': np.std(inter_arrivals) if len(inter_arrivals) > 0 else 0,
+        'iat_min': min(inter_arrivals) if len(inter_arrivals) > 0 else 0,
+        'iat_max': max(inter_arrivals) if len(inter_arrivals) > 0 else 0,
 
         # Labels
         'content_type': content_type,
@@ -264,13 +298,12 @@ def extract_features(pcap_file, genre, content_type, spotify_ips):
     return features
 
 
-def process_directory(root_dir, spotify_ips):
+def process_directory(root_dir):
     """
     Process all pcap files in the directory structure
 
     Parameters:
     - root_dir: root directory containing genre folders
-    - spotify_ips: list of Spotify IP addresses
 
     Returns:
     - DataFrame with extracted features
@@ -281,7 +314,8 @@ def process_directory(root_dir, spotify_ips):
     content_type_map = {
         'podcast': 'podcast',
         'rock': 'music',
-        'rap': 'music'
+        'rap': 'music',
+        'edm': 'music'
     }
 
     root_path = Path(root_dir)
@@ -309,7 +343,7 @@ def process_directory(root_dir, spotify_ips):
 
         for pcap_file in pcap_files:
             print(f"  Processing: {pcap_file.name}")
-            features = extract_features(str(pcap_file), genre, content_type, spotify_ips)
+            features = extract_features(str(pcap_file), genre, content_type)
 
             if features:
                 # Extract content_id from filename
@@ -322,23 +356,17 @@ def process_directory(root_dir, spotify_ips):
 def main():
     """Main execution function"""
     print("=" * 60)
-    print("Enhanced PCAP Feature Extractor for Spotify Traffic")
-    print("Extracting Directional, TLS & Temporal Features")
-    print("=" * 60)
-
-    # Load Spotify IPs
-    spotify_ips = load_spotify_ips()
-    print(f"Loaded {len(spotify_ips)} Spotify IP(s): {', '.join(spotify_ips)}")
+    print("Enhanced PCAP Feature Extractor")
+    print("Peak Detection & Traffic Pattern Analysis")
     print("=" * 60)
 
     # Process all pcap files
-    df = process_directory(PCAP_ROOT, spotify_ips)
+    df = process_directory(PCAP_ROOT)
 
     if df.empty:
         print("\nNo features extracted. Check if:")
         print(f"1. Directory '{PCAP_ROOT}' exists")
-        print("2. Subdirectories (podcast, rock, rap) contain .pcap files")
-        print(f"3. Pcap files contain traffic with IPs: {spotify_ips}")
+        print("2. Subdirectories contain .pcap files")
         return
 
     # Reorder columns for better readability
@@ -366,22 +394,18 @@ def main():
     print("\nFirst few rows:")
     print(df.head())
 
-    # Display feature statistics by content type
+    # Display key feature comparison
     print("\n\nKey Feature Comparison (Music vs Podcast):")
-    comparison_features = ['downstream_cv', 'pkt_cv', 'burst_cv', 'iat_cv',
-                           'packet_rate', 'downstream_throughput', 'large_pkt_ratio']
+    comparison_features = [
+        'pkt_count', 'pkt_rate', 'burst_rate',
+        'peak_count', 'peak_frequency', 'peak_to_avg_ratio',
+        'traffic_cv', 'initial_burst_ratio'
+    ]
 
     for feature in comparison_features:
         if feature in df.columns:
             print(f"\n{feature}:")
             print(df.groupby('content_type')[feature].agg(['mean', 'std']))
-
-    # Display directional statistics
-    print("\n\nDirectional Traffic Analysis:")
-    print(f"Average upstream packets: {df['pkt_count_up'].mean():.1f}")
-    print(f"Average downstream packets: {df['pkt_count_down'].mean():.1f}")
-    print(f"Average bytes ratio (down/up): {df['bytes_ratio'].mean():.2f}")
-    print(f"Average packet count ratio (down/up): {df['pkt_count_ratio'].mean():.2f}")
 
 
 if __name__ == "__main__":

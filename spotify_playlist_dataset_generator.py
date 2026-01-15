@@ -1,134 +1,48 @@
 import time
 import os
 import threading
-from scapy.all import sniff, wrpcap, IP
+from scapy.all import sniff, wrpcap
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
 
-# Load .env file from current directory
 load_dotenv()
 
-# Configuration
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 CAPTURE_DURATION = 60  # seconds
-IP_CACHE_FILE = "spotify_ips.json"
-
-# Load cached Spotify IPs - REQUIRED, no fallback
-try:
-    import json
-
-    with open(IP_CACHE_FILE, 'r') as f:
-        cached_data = json.load(f)
-        SPOTIFY_IPS = set(cached_data.get('ips', []))
-        print(f"[*] Loaded {len(SPOTIFY_IPS)} cached Spotify IPs from {IP_CACHE_FILE}")
-except FileNotFoundError:
-    SPOTIFY_IPS = set()
-    print(f"[!] ERROR: {IP_CACHE_FILE} not found!")
-    print(f"[!] You MUST run discovery mode first:")
-    print(f"[!]   sudo python script.py --discover")
 
 MUSIC_PLAYLISTS = [
-    # "7IddiFVjAJbTLniq82Vusj",  # Pink Floyd Best Of
-    # "5HpkkM0bOPDUgLcho7nCoZ",  # Tame Impala best songs
-    # "28nxGp2hLho3BA0dX3cb5P",  # THE BEST OF RADIOHEAD
+    "5HpkkM0bOPDUgLcho7nCoZ",  # Tame Impala best songs
+    "7IddiFVjAJbTLniq82Vusj",  # Pink Floyd Best Of
+    "28nxGp2hLho3BA0dX3cb5P",  # THE BEST OF RADIOHEAD
 
-    # "6Fs9lBMpHdqjvQ6wCPDnKc",  # Peak Kanye
     # "35kZMub9UFGSheeghSXBfw",  # (neo-psychedelic) Best of Tame Impala
     # "4gHuAdOjAZHMb6WYKQhbLD",  # (neo-psychedelic) mgmt need to change to indie -- tame impala alo indie
-    # "3IffYurXS0a9WC3SikI4TV",  # travis(rap) best songs and hardest hits
+
+    "6Fs9lBMpHdqjvQ6wCPDnKc",  # Peak Kanye
+    "2Zz5YsBYmvWFweK5S0sRdT",  # Kendriick
+    "3IffYurXS0a9WC3SikI4TV",  # travis(rap) best songs and hardest hits
 
     # ----------------------------------------------------------------
     # "0U3ACsVhROtNwwacDmhcuR",  # (Progressive Rock) 25 King Crimson
     # "4yebu47SKvUq8aWmTu1cRc",  # david bowie Art Rock
 
     # edm
-    "1mkinKlTq2OV9MCE5Nkpp9",
-    "10PXjjuLhwtYRZtJkgixLO",
-    "6Sv7aZ1fHZVEWfGdhqWn87",
-    "0yskWBwX31blZR9bVCBZTL",
+    # "1mkinKlTq2OV9MCE5Nkpp9",
+    # "10PXjjuLhwtYRZtJkgixLO",
+    # "6Sv7aZ1fHZVEWfGdhqWn87",
+    # "0yskWBwX31blZR9bVCBZTL",
 ]
 
-# ADD YOUR PODCAST PLAYLISTS HERE (just the ID from the URL)
-# Using playlists ensures different episodes each time, better for ML diversity
 PODCAST_PLAYLISTS = [
     # "5icMx65GADu8ICFmK7BwrL",  # Top 10 podcasts for life
     # "38he99wNRz1QU6mrOAeyw9",  # podcasts that changed my life <3
     # "4DX89yK57dk2m5OztHqNPK",  # best true crime podcasts
     # "5lNiCLt9Rx2U3CGX2MxFcH",  # philosophy podcasts
+    # "316J2qxLUujvp9IGiZJ7PW"
 ]
-
-
-def is_spotify_packet(packet):
-    if not packet.haslayer(IP):
-        return False
-
-    src_ip = packet[IP].src
-    dst_ip = packet[IP].dst
-
-    if src_ip in SPOTIFY_IPS or dst_ip in SPOTIFY_IPS:
-        return True
-
-    return False
-
-def discover_and_save_spotify_ips(interface="enp0s3", duration=10):
-    print("\n" + "=" * 60)
-    print("🔍 SPOTIFY IP DISCOVERY MODE")
-    print("=" * 60)
-    print(f"Scanning for {duration} seconds to find Spotify server IPs.")
-    print("Make sure Spotify is ACTIVELY STREAMING during this scan!")
-    print("=" * 60)
-
-    input("\n  Press ENTER to start discovery scan...")
-
-    discovered_ips = set()
-    packet_count = 0
-
-    def discovery_callback(packet):
-        nonlocal packet_count
-        packet_count += 1
-
-        if packet.haslayer(IP):
-            if len(packet) > 500:
-                src_ip = packet[IP].src
-                dst_ip = packet[IP].dst
-
-                if not (src_ip.startswith('192.168.') or src_ip.startswith('10.') or
-                        src_ip.startswith('172.') or src_ip.startswith('127.')):
-                    discovered_ips.add(src_ip)
-
-                if not (dst_ip.startswith('192.168.') or dst_ip.startswith('10.') or
-                        dst_ip.startswith('172.') or dst_ip.startswith('127.')):
-                    discovered_ips.add(dst_ip)
-
-    print(f"\n[*] Scanning for {duration} seconds...")
-    sniff(iface=interface, prn=discovery_callback, timeout=duration, store=False)
-
-    print(f"\n[+] Scan complete!")
-    print(f"    Total packets: {packet_count}")
-    print(f"    Potential Spotify IPs: {len(discovered_ips)}")
-
-    if discovered_ips:
-        print("\n✓ Discovered IPs:")
-        for ip in sorted(discovered_ips):
-            print(f"      - {ip}")
-
-        cache_data = {
-            'ips': list(discovered_ips),
-            'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-            'duration': duration
-        }
-
-        with open(IP_CACHE_FILE, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-
-        print(f"\n✓ IPs saved to {IP_CACHE_FILE}")
-        return discovered_ips
-    else:
-        print("\n⚠️  No IPs discovered!")
-        return set()
 
 
 class SpotifyPcapCapture:
@@ -138,7 +52,6 @@ class SpotifyPcapCapture:
         self.pcap_dir = 'pcap'
         self.tracks_per_playlist = tracks_per_playlist
         self.episodes_per_playlist = episodes_per_playlist
-        self.playback_error = None
 
         self.music_tracks = []
         self.podcast_episodes = []
@@ -146,21 +59,39 @@ class SpotifyPcapCapture:
         os.makedirs(self.pcap_dir, exist_ok=True)
 
     def setup_spotify_client(self):
-        """Initialize Spotipy client"""
-        print("Setting up Spotify client...")
+        """Initialize Spotipy client - connects to already running Spotify"""
+        print("\nConnecting to Spotify...")
         scope = "user-modify-playback-state user-read-playback-state"
+
+        # Get the actual user's home directory (not root's)
+        import pwd
+        cache_path = '.cache-spotify-pcap-token'
+
         self.spotify_client = spotipy.Spotify(auth_manager=SpotifyOAuth(
             client_id=SPOTIFY_CLIENT_ID,
             client_secret=SPOTIFY_CLIENT_SECRET,
             redirect_uri=SPOTIFY_REDIRECT_URI,
-            scope=scope
+            scope=scope,
+            cache_path=cache_path,
+            open_browser=False  # Don't try to open browser as root
         ))
-        print("    ✓ Spotify client authenticated")
+        print("    ✓ Spotify API authenticated")
 
+        # Check for active devices
         devices = self.spotify_client.devices()
         if not devices['devices']:
+            print("\n" + "=" * 70)
+            print("❌ ERROR: No active Spotify device found!")
+            print("=" * 70)
+            print("Please make sure:")
+            print("  1. Spotify is open and running on this computer or your phone")
+            print("  2. You're logged in to Spotify")
+            print("  3. The device is active (play something briefly to activate it)")
+            print("=" * 70)
             raise Exception("No active Spotify device found!")
-        print(f"    ✓ Active device: {devices['devices'][0]['name']}")
+
+        active_device = devices['devices'][0]
+        print(f"    ✓ Active device: {active_device['name']} ({active_device['type']})")
 
     def fetch_playlist_tracks(self):
         """Fetch track URIs from playlists"""
@@ -227,86 +158,87 @@ class SpotifyPcapCapture:
             return "unknown"
 
     def capture_content_traffic(self, content_type, content_info, index, total):
-        """Capture traffic for a track or episode"""
+        """Capture traffic using Scapy while content plays"""
         if content_type == "music":
             print(f"\n[{index + 1}/{total}] Capturing {content_type}")
-            print(f"   {content_info['artist']} - {content_info['name']}")
+            print(f"   🎵 {content_info['artist']} - {content_info['name']}")
         else:
             print(f"\n[{index + 1}/{total}] Capturing {content_type}")
-            print(f"   {content_info['show']} - {content_info['name']}")
+            print(f"   🎙️  {content_info['show']} - {content_info['name']}")
 
-        self.playback_error = None
+        # Prepare filename
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        safe_name = content_info['name'][:30].replace('/', '_').replace('\\', '_').replace(':', '_')
+
+        # Get genre for directory organization
+        if content_type == "music":
+            genre = self.get_genre_for_track(content_info['artist_id'])
+        else:
+            genre = "podcast"
+
+        # Create genre-based directory structure
+        genre_dir = os.path.join(self.pcap_dir, genre)
+        os.makedirs(genre_dir, exist_ok=True)
+
+        pcap_filename = os.path.join(genre_dir, f"{timestamp}_{safe_name}.pcap")
+
+        # Start Spotify playback in a separate thread
+        playback_started = threading.Event()
+        playback_error = {'error': None}
 
         def start_playback():
-            time.sleep(0.5)
             try:
+                time.sleep(1)  # Small delay to ensure capture is ready
                 self.spotify_client.start_playback(uris=[content_info['uri']], position_ms=0)
+                playback_started.set()
             except Exception as e:
-                self.playback_error = str(e)
+                playback_error['error'] = str(e)
+                playback_started.set()
 
         playback_thread = threading.Thread(target=start_playback)
         playback_thread.daemon = True
+
+        print(f"    📡 Starting packet capture for {CAPTURE_DURATION} seconds...")
         playback_thread.start()
 
-        print(f"    Capturing packets for {CAPTURE_DURATION} seconds...")
-        print(f"    Using {len(SPOTIFY_IPS)} IPs from {IP_CACHE_FILE}")
-
-        # Capture ALL traffic (no filter), then filter by IP after
-        packets = sniff(
-            iface=self.interface,
-            filter="",
-            timeout=CAPTURE_DURATION,
-            store=True,
-        )
-
-        if self.playback_error:
-            print(f"     Playback error: {self.playback_error}")
+        # Capture packets with Scapy
+        try:
+            packets = sniff(
+                iface=self.interface,
+                timeout=CAPTURE_DURATION,
+                store=True
+            )
+        except Exception as e:
+            print(f"    ❌ Capture error: {e}")
+            print(f"       Make sure you're running with sudo and interface '{self.interface}' exists")
             return None
 
-        # Filter packets by Spotify IPs AFTER capture (ONLY cached IPs)
-        spotify_packets = [p for p in packets if is_spotify_packet(p)]
+        # Wait for playback thread to complete
+        playback_thread.join(timeout=2)
 
-        print(f"    Total packets captured: {len(packets)}")
-        print(f"    Spotify packets (IP-filtered): {len(spotify_packets)}")
-        if len(packets) > 0:
-            print(f"    Filter efficiency: {len(spotify_packets) / len(packets) * 100:.1f}%")
+        # Check for playback errors
+        if playback_error['error']:
+            print(f"    ⚠️  Playback error: {playback_error['error']}")
+            # Continue anyway - we still captured packets
 
-        if spotify_packets:
-            # Save PCAP with Spotify packets only
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            safe_name = content_info['name'][:30].replace('/', '_').replace('\\', '_')
+        print(f"    📦 Total packets captured: {len(packets)}")
 
-            # Get genre for filename
-            if content_type == "music":
-                genre = self.get_genre_for_track(content_info['artist_id'])
-            else:
-                genre = "podcast"
-
-            pcap_filename = f"{self.pcap_dir}/{content_type}_{genre}_{timestamp}_{safe_name}.pcap"
-            wrpcap(pcap_filename, spotify_packets)
-            print(f"    ✓ Saved PCAP: {pcap_filename}")
-            return pcap_filename
+        if packets and len(packets) > 0:
+            # Save captured packets
+            try:
+                wrpcap(pcap_filename, packets)
+                file_size = os.path.getsize(pcap_filename)
+                print(f"    ✅ Saved: {pcap_filename} ({file_size / 1024:.1f} KB)")
+                return pcap_filename
+            except Exception as e:
+                print(f"    ❌ Error saving PCAP: {e}")
+                return None
         else:
-            print(f"     No Spotify packets captured!")
+            print(f"    ⚠️  No packets captured!")
             return None
 
     def generate_dataset(self):
         try:
-            # Check if we have cached IPs - REQUIRED
-            if not SPOTIFY_IPS:
-                print("\n" + "=" * 60)
-                print(" ERROR: No Spotify IPs loaded!")
-                print("=" * 60)
-                print(f"You MUST run discovery mode first to create {IP_CACHE_FILE}")
-                print("\nRun this command:")
-                print(f"  sudo python {os.path.basename(__file__)} --discover")
-                print("\nThis will:")
-                print("1. Capture traffic while Spotify is streaming")
-                print("2. Identify Spotify server IPs")
-                print(f"3. Save them to {IP_CACHE_FILE}")
-                print("=" * 60)
-                return
-
             self.setup_spotify_client()
 
             if MUSIC_PLAYLISTS:
@@ -318,26 +250,29 @@ class SpotifyPcapCapture:
             total_items = len(self.music_tracks) + len(self.podcast_episodes)
 
             if total_items == 0:
-                print("\n✗ No content found! Add playlist IDs.")
+                print("\n❌ No content found! Add playlist IDs to MUSIC_PLAYLISTS or PODCAST_PLAYLISTS")
                 return
 
-            print("\n" + "=" * 60)
+            print("\n" + "=" * 70)
             print("COLLECTION SUMMARY")
-            print("=" * 60)
-            print(f"Music tracks: {len(self.music_tracks)}")
-            print(f"Podcast episodes: {len(self.podcast_episodes)}")
-            print(f"Total items: {total_items}")
-            print(f"Estimated time: ~{total_items * (CAPTURE_DURATION + 9) // 60} minutes")
-            print(f"\n✓ Using {len(SPOTIFY_IPS)} cached Spotify IPs from {IP_CACHE_FILE}")
-            print("=" * 60)
+            print("=" * 70)
+            print(f"Music tracks:       {len(self.music_tracks)}")
+            print(f"Podcast episodes:   {len(self.podcast_episodes)}")
+            print(f"Total items:        {total_items}")
+            print(f"Capture duration:   {CAPTURE_DURATION} seconds per item")
+            print(f"Estimated time:     ~{total_items * (CAPTURE_DURATION + 7) // 60} minutes")
+            print(f"\n📝 Note: Capturing ALL traffic (no IP filtering)")
+            print(f"    Feature extraction will handle Spotify IP filtering later")
+            print("=" * 70)
 
-            input("\nMake sure Spotify is open, then press Enter...")
+            input("\n👉 Press Enter to start capturing...")
 
-            print("\n" + "=" * 60)
+            print("\n" + "=" * 70)
             print("STARTING CAPTURE")
-            print("=" * 60)
+            print("=" * 70)
 
             captured_count = 0
+            failed_count = 0
             current_item = 0
 
             # Capture music tracks
@@ -345,10 +280,12 @@ class SpotifyPcapCapture:
                 result = self.capture_content_traffic("music", track, current_item, total_items)
                 if result:
                     captured_count += 1
+                else:
+                    failed_count += 1
 
                 current_item += 1
                 if current_item < total_items:
-                    print("    Waiting 5 seconds before next capture...")
+                    print("    ⏳ Waiting 5 seconds before next capture...")
                     time.sleep(5)
 
             # Capture podcast episodes
@@ -356,22 +293,29 @@ class SpotifyPcapCapture:
                 result = self.capture_content_traffic("podcast", episode, current_item, total_items)
                 if result:
                     captured_count += 1
+                else:
+                    failed_count += 1
 
                 current_item += 1
                 if current_item < total_items:
-                    print("    Waiting 5 seconds before next capture...")
+                    print("    ⏳ Waiting 5 seconds before next capture...")
                     time.sleep(5)
 
             # Summary
-            print("\n" + "=" * 60)
-            print("CAPTURE COMPLETE")
-            print("=" * 60)
-            print(f"Successfully captured: {captured_count}/{total_items} items")
-            print(f"PCAPs saved to: {self.pcap_dir}/")
-            print("=" * 60)
+            print("\n" + "=" * 70)
+            print("🎉 CAPTURE COMPLETE")
+            print("=" * 70)
+            print(f"✅ Successfully captured: {captured_count}/{total_items} items")
+            if failed_count > 0:
+                print(f"❌ Failed captures:       {failed_count}/{total_items} items")
+            print(f"📁 PCAPs saved to:        {self.pcap_dir}/")
+            print("\n📌 Next steps:")
+            print("   1. Run the feature extractor to process PCAPs")
+            print("   2. The extractor will filter by Spotify IPs from spotify_ips.json")
+            print("=" * 70)
 
         except Exception as e:
-            print(f"\n\nError: {e}")
+            print(f"\n\n❌ Error: {e}")
             import traceback
             traceback.print_exc()
 
@@ -380,58 +324,109 @@ if __name__ == "__main__":
     import sys
 
     try:
-        if len(sys.argv) > 1 and sys.argv[1] == "--discover":
-            interface = input("Network interface (default: enp0s3): ").strip() or "enp0s3"
-            discover_and_save_spotify_ips(interface=interface, duration=10)
+        print("=" * 70)
+        print("🎵 SPOTIFY PCAP CAPTURE - SCAPY MODE")
+        print("=" * 70)
+
+        # Check authentication BEFORE requiring root
+        if not all([SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI]):
+            print("\n❌ ERROR: Spotify credentials not found in .env file!")
+            print("Please create a .env file with:")
+            print("  SPOTIFY_CLIENT_ID=your_client_id")
+            print("  SPOTIFY_CLIENT_SECRET=your_client_secret")
+            print("  SPOTIFY_REDIRECT_URI=your_redirect_uri")
+            sys.exit(1)
+
+        # Check if we need to authenticate first
+        sudo_user = os.environ.get('SUDO_USER')
+        if sudo_user:
+            import pwd
+
+            user_home = pwd.getpwnam(sudo_user).pw_dir
+            cache_path = os.path.join(user_home, '.cache', 'spotify-pcap-token')
         else:
+            cache_path = '.cache-spotify-pcap-token'
+
+
+        # Handle --auth flag for initial authentication
+        if len(sys.argv) > 1 and sys.argv[1] == '--auth':
+            if os.geteuid() == 0:
+                print("\n❌ ERROR: Don't run --auth with sudo!")
+                print("Run as normal user: python3 capture.py --auth")
+                sys.exit(1)
+
+            print("\n📋 AUTHENTICATING WITH SPOTIFY")
             print("=" * 70)
-            print("SPOTIFY PCAP CAPTURE - USES ONLY DISCOVERED IPs")
+            print("This will open a browser window for Spotify login.")
+            print("After logging in, the token will be cached for sudo use.")
             print("=" * 70)
-            print("\n📋 REQUIREMENTS:")
-            print("1. sudo privileges")
-            print("2. Spotify credentials in .env")
-            print("3. Update MUSIC_PLAYLISTS and PODCAST_PLAYLISTS")
-            print("4. pip install scapy spotipy python-dotenv")
-            print("\n FIRST TIME SETUP:")
-            print("   1. Run discovery mode:")
-            print(f"      sudo python {os.path.basename(__file__)} --discover")
-            print("   2. Start Spotify and play music during the scan")
-            print("   3. Then run normal capture mode")
+            input("\nPress Enter to continue...")
 
-            if SPOTIFY_IPS:
-                print(f"\n✓ Found {len(SPOTIFY_IPS)} IPs in {IP_CACHE_FILE}")
-            else:
-                print(f"\n No IPs found in {IP_CACHE_FILE}")
-                print("   You MUST run --discover mode first!")
-            print("=" * 70 + "\n")
+            scope = "user-modify-playback-state user-read-playback-state"
+            sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+                client_id=SPOTIFY_CLIENT_ID,
+                client_secret=SPOTIFY_CLIENT_SECRET,
+                redirect_uri=SPOTIFY_REDIRECT_URI,
+                scope=scope,
+                cache_path=cache_path
+            ))
 
-            if not SPOTIFY_IPS:
-                print("Cannot proceed without discovered IPs. Exiting...")
-                exit(1)
+            # Test the connection
+            user = sp.current_user()
+            print(f"\n✅ Successfully authenticated as: {user['display_name']}")
+            print(f"📁 Token cached at: {cache_path}")
+            print("\nYou can now run the capture with sudo:")
+            print("  sudo python3 capture.py")
+            sys.exit(0)
 
-            print("\nConfigure capture:")
-            while True:
-                try:
-                    tracks = int(input("Tracks per playlist (default 10): ").strip() or "10")
-                    episodes = int(input("Episodes per playlist (default 10): ").strip() or "10")
-                    if tracks > 0 and episodes > 0:
-                        break
-                    print("Enter positive numbers")
-                except ValueError:
-                    print("Enter valid numbers")
+        print("\n📋 PREREQUISITES:")
+        print("  ✓ Running as root (for packet capture)")
+        print("  ✓ Spotify credentials configured in .env file")
+        print("  ✓ Authenticated with Spotify (token cached)")
+        print("\n📝 WORKFLOW:")
+        print("  1. This script connects to your running Spotify via API")
+        print("  2. Uses Scapy to capture ALL traffic during playback")
+        print("  3. Organizes captures by genre in pcap/ directory")
+        print("  4. Feature extractor later filters by Spotify IPs")
+        print("\n⚠️  REQUIREMENTS:")
+        print("  • Spotify must be OPEN and RUNNING")
+        print("  • Device must be active (play something first)")
+        print("=" * 70)
 
-            generator = SpotifyPcapCapture(
-                tracks_per_playlist=tracks,
-                episodes_per_playlist=episodes
-            )
-            generator.generate_dataset()
+        print("\n⚙️  Configure capture:")
+        while True:
+            try:
+                tracks = int(input("  Tracks per playlist (default 10): ").strip() or "10")
+                episodes = int(input("  Episodes per playlist (default 10): ").strip() or "10")
+                if tracks > 0 and episodes > 0:
+                    break
+                print("  ❌ Enter positive numbers")
+            except ValueError:
+                print("  ❌ Enter valid numbers")
+
+        interface = input("  Network interface (default: enp0s3): ").strip() or "enp0s3"
+
+        print("\n" + "=" * 70)
+        print("⚠️  FINAL CHECK:")
+        print("  1. Is Spotify OPEN and RUNNING?")
+        print("  2. Are you logged in?")
+        print("  3. Have you played something to activate the device?")
+        print("=" * 70)
+        input("Press Enter when ready to start capturing...")
+
+        generator = SpotifyPcapCapture(
+            interface=interface,
+            tracks_per_playlist=tracks,
+            episodes_per_playlist=episodes
+        )
+        generator.generate_dataset()
 
     except KeyboardInterrupt:
-        print("\n\n  Interrupted")
-        exit(0)
+        print("\n\n⚠️  Interrupted by user")
+        sys.exit(0)
     except Exception as e:
-        print(f"\n Error: {e}")
+        print(f"\n❌ Fatal error: {e}")
         import traceback
 
         traceback.print_exc()
-        exit(1)
+        sys.exit(1)

@@ -4,8 +4,7 @@
     "spotify:track:1zMH7Nak15QthI2Y7WrCwg",
     "spotify:track:3eE2slIDl03bU6VYvnXQZv",
     "spotify:episode:6YkJqm4DRjYWDfa7SyO6eq",
-    "spotify:episode:1NZibQdCjc6IqINITrjWSq",
-    "spotify:episode:5D1uq9kLKjDzVM3cDjzI1X"
+    "spotify:episode:1NZibQdCjc6IqINITrjWSq"
   ],
   "streaming_qualities": [
     "low",
@@ -15,7 +14,7 @@
     "web-player"
   ],
   "pcap_save_dir" : "pcap_folder",
-  "interface" : "ens33",
+  "interface" : "enp0s3",
   "capture_duration" : 60,
-  "num_sessions" : 10
+  "num_sessions" : 100
 }

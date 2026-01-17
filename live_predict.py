@@ -8,18 +8,14 @@ import matplotlib.pyplot as plt
 from scapy.all import sniff, wrpcap, rdpcap, IP
 from scipy.signal import find_peaks
 
-# -----------------------------
 # Configuration
-# -----------------------------
 CAPTURE_FILE = "live_capture.pcap"
-INTERFACE = "Wi-Fi"  # Change if needed (e.g., "eth0", "en0")
+INTERFACE = "enp0s3"  # Change if needed (e.g., "eth0", "en0")
 CAPTURE_DURATION = 60  # seconds
 MODEL_DIR = "models"
 
 
-# -----------------------------
 # Load Models
-# -----------------------------
 def load_models():
     """Load all trained models and encoders"""
     print("\n" + "=" * 60)
@@ -41,14 +37,12 @@ def load_models():
         return content_model, genre_model, label_encoder, content_features, genre_features
 
     except Exception as e:
-        print(f"❌ Error loading models: {e}")
+        print(f"Error loading models: {e}")
         print("\nMake sure you've run train.py first!")
         raise
 
 
-# -----------------------------
 # Traffic Capture
-# -----------------------------
 def capture_traffic():
     """Capture live network traffic (all IP packets)"""
     packets, total = [], 0
@@ -73,7 +67,7 @@ def capture_traffic():
             store=False
         )
     except Exception as e:
-        print(f"\n❌ Capture error: {e}")
+        print(f"\n Capture error: {e}")
         print("   Try running with sudo/admin privileges")
         print(f"   Or change INTERFACE from '{INTERFACE}' to your network interface")
         return []
@@ -86,15 +80,13 @@ def capture_traffic():
         wrpcap(CAPTURE_FILE, packets)
         print(f"    Saved to:          {CAPTURE_FILE}")
     else:
-        print("\n⚠️  No packets captured!")
+        print("\n  No packets captured!")
         print("   Check your network interface and try again")
 
     return packets
 
 
-# -----------------------------
 # Feature Extraction (New Peak Detection Features)
-# -----------------------------
 def get_packets_per_second(packets, interval=1.0):
     """Calculate packet counts per time interval"""
     if len(packets) == 0:
@@ -400,9 +392,7 @@ def plot_packets_over_time(intervals, counts, output_file="packet_timeline.png")
     print(f"  Peak rate: {max_rate} packets/second")
 
 
-# -----------------------------
 # Prediction
-# -----------------------------
 def predict_traffic(features, content_features, genre_features,
                     content_model, genre_model, label_encoder):
     """Predict content type and genre from features"""
@@ -410,7 +400,7 @@ def predict_traffic(features, content_features, genre_features,
     try:
         X = pd.DataFrame([features])[content_features]
     except KeyError as e:
-        print(f"\n❌ ERROR: Missing feature: {e}")
+        print(f"\n ERROR: Missing feature: {e}")
         print(f"\nExtracted: {list(features.keys())}")
         print(f"Expected:  {content_features}")
         missing = set(content_features) - set(features.keys())
@@ -418,7 +408,7 @@ def predict_traffic(features, content_features, genre_features,
         return None
 
     if X.isnull().any().any():
-        print("\n⚠️  WARNING: NaN values detected!")
+        print("\n WARNING: NaN values detected!")
         X = X.fillna(0)
 
     result = {}
@@ -479,9 +469,7 @@ def print_results(res):
     print("\n" + "=" * 60)
 
 
-# -----------------------------
 # Main
-# -----------------------------
 def main():
     print("\n" + "=" * 60)
     print("    🎵 SPOTIFY LIVE TRAFFIC ANALYZER 🎵")
@@ -494,13 +482,13 @@ def main():
     # Capture traffic
     packets = capture_traffic()
     if not packets:
-        print("\n❌ No packets captured. Exiting.")
+        print("\n No packets captured. Exiting.")
         return
 
     # Extract features
     result = extract_features(packets)
     if not result:
-        print("\n❌ Feature extraction failed")
+        print("\n Feature extraction failed")
         return
 
     features, intervals, counts = result
@@ -524,7 +512,7 @@ def main():
     # Print results
     print_results(results)
 
-    print(f"\n✅ Analysis complete!")
+    print(f"\n Analysis complete!")
     print(f"   Capture saved to: {CAPTURE_FILE}")
     print(f"   Graph saved to: packet_timeline.png")
     print("=" * 60 + "\n")
@@ -534,9 +522,9 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Interrupted by user")
+        print("\n\n  Interrupted by user")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n Error: {e}")
         import traceback
 
         traceback.print_exc()

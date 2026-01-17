@@ -235,10 +235,11 @@ def train_content_model(df, features):
     )
 
     model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=8,
-        min_samples_split=10,
-        min_samples_leaf=5,
+        n_estimators=200,
+        max_depth = 6 , # Shallower trees (less complex)
+        min_samples_split = 15,  # More conservative splits
+        min_samples_leaf = 8,  # Larger leaf nodes
+        min_impurity_decrease = 0.001 , # Require minimum improvement
         max_features="sqrt",
         class_weight="balanced",
         oob_score=True,
